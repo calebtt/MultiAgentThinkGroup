@@ -9,11 +9,42 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Serilog;
+using Serilog.Events;
+
+
+public static partial class Algos
+{
+    public static void AddConsoleLogger(string? logName)
+    {
+        var serilogLogger = new LoggerConfiguration()
+            .Enrich.FromLogContext()
+            .MinimumLevel.Verbose()
+            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+            .MinimumLevel.Override("System", LogEventLevel.Warning)
+            .WriteTo.Console(
+                restrictedToMinimumLevel: LogEventLevel.Information,
+                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+            .WriteTo.File(
+                path: logName ?? "log.txt",
+                restrictedToMinimumLevel: LogEventLevel.Information,
+                rollingInterval: RollingInterval.Infinite,
+                rollOnFileSizeLimit: true,
+                fileSizeLimitBytes: 100 * 1024 * 1024, // 100 MB
+                retainedFileCountLimit: 5)
+            .CreateLogger();
+
+        Log.Logger = serilogLogger;
+        Log.Information("Serilog configured.");
+    }
+}
 
 class Program
 {
     static async Task Main(string[] args)
     {
+        Algos.AddConsoleLogger("MultiAgentThinkGroupLog.txt");
+
         // Load keys
         var openAIKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? throw new InvalidOperationException("OPENAI_API_KEY not set.");
         var googleKey = Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? throw new InvalidOperationException("GOOGLE_API_KEY not set.");
@@ -68,7 +99,7 @@ class Program
             grokInitialMessages.Add(msg);
         }
         var grokInitialContent = grokInitialMessages.LastOrDefault()?.Content ?? "";
-        Console.WriteLine($"Grok Initial: {grokInitialContent}");
+        Log.Information($"Grok Initial: {grokInitialContent}");
 
         var chatGPTInitialMessages = new List<ChatMessageContent>();
         await foreach (var msg in chatGPTAgent.InvokeAsync(initialHistory))
@@ -76,7 +107,7 @@ class Program
             chatGPTInitialMessages.Add(msg);
         }
         var chatGPTInitialContent = chatGPTInitialMessages.LastOrDefault()?.Content ?? "";
-        Console.WriteLine($"ChatGPT Initial: {chatGPTInitialContent}");
+        Log.Information($"ChatGPT Initial: {chatGPTInitialContent}");
 
         var geminiInitialMessages = new List<ChatMessageContent>();
         await foreach (var msg in geminiAgent.InvokeAsync(initialHistory))
@@ -84,7 +115,7 @@ class Program
             geminiInitialMessages.Add(msg);
         }
         var geminiInitialContent = geminiInitialMessages.LastOrDefault()?.Content ?? "";
-        Console.WriteLine($"Gemini Initial: {geminiInitialContent}");
+        Log.Information($"Gemini Initial: {geminiInitialContent}");
 
         // Define Termination Function (adjusted to check if ALL recent messages include 'TERMINATE')
         var terminationFunction = KernelFunctionFactory.CreateFromPrompt(
@@ -125,12 +156,12 @@ class Program
         groupChat.AddChatMessage(new ChatMessageContent(AuthorRole.User, "Now evaluate each other's CoT responses, suggest improvements, refine collaboratively, and reach consensus on a merged output. Take turns: Grok first, then ChatGPT, then Gemini. Continue until all agree."));
 
         // Invoke Group Chat (Iterations) with debug logging
-        Console.WriteLine("Group Chat Evaluations:");
+        Log.Information("Group Chat Evaluations:");
         int turn = 0;
         await foreach (var message in groupChat.InvokeAsync())
         {
             turn++;
-            Console.WriteLine($"Turn {turn} - {message.AuthorName}: {message.Content}");
+            Log.Information($"Turn {turn} - {message.AuthorName}: {message.Content}");
         }
 
         // Retrieve chat history
@@ -156,7 +187,7 @@ class Program
                 summaryMessages.Add(msg);
             }
             historyMessages = summaryMessages;  // Replace with summary for consolidator
-            Console.WriteLine("History summarized due to length.");
+            Log.Warning("History summarized due to length.");
         }
 
         // Consolidate
@@ -168,7 +199,7 @@ class Program
         }
         if (finalOutputs.Count > 0)
         {
-            Console.WriteLine($"Final Output: {finalOutputs.Last().Content}");
+            Log.Information($"Final Output: {finalOutputs.Last().Content}");
         }
     }
 }

@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Serilog;
 
 public class GrokCompletionService : IChatCompletionService
 {
@@ -40,10 +41,10 @@ public class GrokCompletionService : IChatCompletionService
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
-                Console.WriteLine($"API Error: Status Code {response.StatusCode}");
-                Console.WriteLine($"Reason Phrase: {response.ReasonPhrase}");
-                Console.WriteLine($"Response Content: {errorContent}");
-                Console.WriteLine($"Request Payload: {JsonSerializer.Serialize(payload)}");
+                Log.Error($"API Error: Status Code {response.StatusCode}");
+                Log.Error($"Reason Phrase: {response.ReasonPhrase}");
+                Log.Error($"Response Content: {errorContent}");
+                Log.Error($"Request Payload: {JsonSerializer.Serialize(payload)}");
                 throw new HttpRequestException($"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}). Error Content: {errorContent}");
             }
 
@@ -55,11 +56,11 @@ public class GrokCompletionService : IChatCompletionService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Exception in Grok API call: {ex.Message}");
-            Console.WriteLine($"Stack Trace: {ex.StackTrace}");
+            Log.Error($"Exception in Grok API call: {ex.Message}");
+            Log.Error($"Stack Trace: {ex.StackTrace}");
             if (ex.InnerException != null)
             {
-                Console.WriteLine($"Inner Exception: {ex.InnerException.Message}");
+                Log.Error($"Inner Exception: {ex.InnerException.Message}");
             }
             throw;  // Rethrow to propagate the error
         }
