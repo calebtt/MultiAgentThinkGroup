@@ -1,42 +1,45 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
+﻿using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.Google;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Serilog;
-using Serilog.Events;
 
 public class MultiAgentThinkOrchestrator
 {
-    private readonly string openAIKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? throw new InvalidOperationException("OPENAI_API_KEY not set.");
-    private readonly string googleKey = Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? throw new InvalidOperationException("GOOGLE_API_KEY not set.");
-    private readonly string grokKey = Environment.GetEnvironmentVariable("GROK_API_KEY") ?? throw new InvalidOperationException("GROK_API_KEY not set.");
-
-    private readonly string openAIModel = "gpt-5.1";
-    private readonly string googleModel = "gemini-3-pro-preview";
-    private readonly string grokModel = "grok-4-1-fast-non-reasoning";
-
-    public async Task<string?> RunInferenceAsync(string query)
+    /// <summary>
+    /// Runs the full multi-agent reasoning pipeline using any number of kernels.
+    /// The first kernel in the list is used as the final synthesizer/judge.
+    /// Model names are derived from the chat completion service's Attributes["Model"] or indexed if not found.
+    /// </summary>
+    /// <param name="query">The user's query.</param>
+    /// <param name="kernels">List of kernels (at least one required).</param>
+    /// <returns>The final consolidated answer.</returns>
+    public async Task<string?> RunInferenceAsync(string query, IReadOnlyList<Kernel> kernels)
     {
-        var grokBuilder = Kernel.CreateBuilder();
-        grokBuilder.Services.AddSingleton<IChatCompletionService>(new GrokCompletionService(grokKey, grokModel));
-        var grokKernel = grokBuilder.Build();
+        if (kernels == null || kernels.Count == 0)
+            throw new ArgumentException("At least one kernel is required.", nameof(kernels));
 
-        var chatGPTKernel = Kernel.CreateBuilder().AddOpenAIChatCompletion(openAIModel, openAIKey).Build();
-        var geminiKernel = Kernel.CreateBuilder().AddGoogleAIGeminiChatCompletion(googleModel, googleKey).Build();
+        var modelNames = kernels.Select((k, i) =>
+        {
+            var chatService = k.GetRequiredService<IChatCompletionService>();
+            return chatService.Attributes.TryGetValue("Model", out var modelObj) && modelObj is string modelName
+                ? modelName
+                : $"Model_{i + 1}";
+        }).ToList();
+
+        Log.Information("Starting Multi-Agent Reasoning with {count} models...", kernels.Count);
 
         // ================================================
-        // 1. Generate 3 independent answers in parallel
+        // 1. Generate independent answers in parallel
         // ================================================
-        Log.Information("Step 1: Generating 3 independent answers in parallel...");
+        Log.Information("Step 1: Generating {count} independent answers in parallel...", kernels.Count);
 
-        var initialPrompt = """
+        const string initialPrompt = """
             Answer the user's question with clear, step-by-step reasoning.
             Show your full chain of thought.
             At the end, write "### FINAL ANSWER" followed by your complete, polished response.
@@ -45,88 +48,74 @@ public class MultiAgentThinkOrchestrator
         var initialHistory = new ChatHistory();
         initialHistory.AddUserMessage(initialPrompt + "\n\nQuestion: " + query);
 
-        var grokTask = InvokeAgentAsync(grokKernel, "Grok", initialHistory);
-        var chatGPTTask = InvokeAgentAsync(chatGPTKernel, "ChatGPT", initialHistory);
-        var geminiTask = InvokeAgentAsync(geminiKernel, "Gemini", initialHistory);
+        var answerTasks = kernels.Select((kernel, index) =>
+            InvokeAgentAsync(kernel, modelNames[index], initialHistory)).ToArray();
 
-        // Fixed: Wait for all three and extract results properly
-        var results = await Task.WhenAll(grokTask, chatGPTTask, geminiTask);
-        var grokAnswer = results[0];
-        var chatGPTAnswer = results[1];
-        var geminiAnswer = results[2];
+        var answers = await Task.WhenAll(answerTasks);
 
-        Log.Information("Grok Answer:\n{grok}", grokAnswer);
-        Log.Information("ChatGPT Answer:\n{chatgpt}", chatGPTAnswer);
-        Log.Information("Gemini Answer:\n{gemini}", geminiAnswer);
+        for (int i = 0; i < answers.Length; i++)
+            Log.Information("{name} Answer:\n{content}", modelNames[i], answers[i]);
 
         // ================================================
-        // 2. Each model critiques the other two (parallel)
+        // 2. Each model critiques all others (parallel)
         // ================================================
-        Log.Information("\nStep 2: Each model critiques the other two answers (parallel)...");
+        Log.Information("\nStep 2: Generating cross-critiques (each critiques all others)...");
 
-        var critiquePrompt = """
+        const string critiquePromptTemplate = """
             You are an expert reasoning critic.
-            Your job: read the two answers below from other models.
+            Read the answers below from other models.
             For each:
-            • Identify any flaws in their chain of thought (missing steps, weak assumptions, logical gaps)
+            • Identify flaws in chain of thought (missing steps, weak assumptions, logical gaps)
             • Point out factual errors or oversimplifications
-            • Suggest specific improvements to their reasoning or final answer
+            • Suggest specific improvements
             • Be constructive and precise.
 
-            Format your response as:
-            ### Critique of [Model Name]
-            - [point]
-            - [point]
+            Format:
+            ### Critique of {model}
+            - [point 1]
+            - [point 2]
 
-            Answer 1 ({model1}):
-            {answer1}
-
-            Answer 2 ({model2}):
-            {answer2}
+            {otherAnswers}
             """;
 
-        var critiqueTasks = new[]
+        var critiqueTasks = kernels.Select(async (criticKernel, criticIdx) =>
         {
-            InvokeCritiqueAsync(grokKernel,    "Grok",    chatGPTAnswer, geminiAnswer, "ChatGPT", "Gemini"),
-            InvokeCritiqueAsync(chatGPTKernel, "ChatGPT", grokAnswer,    geminiAnswer, "Grok",    "Gemini"),
-            InvokeCritiqueAsync(geminiKernel,  "Gemini",  grokAnswer,    chatGPTAnswer, "Grok",    "ChatGPT")
-        };
+            var sb = new StringBuilder();
+            for (int targetIdx = 0; targetIdx < kernels.Count; targetIdx++)
+            {
+                if (targetIdx == criticIdx) continue;
+                sb.AppendLine($"Answer from {modelNames[targetIdx]}:\n{answers[targetIdx]}");
+            }
+
+            var prompt = critiquePromptTemplate.Replace("{otherAnswers}", sb.ToString());
+
+            var history = new ChatHistory();
+            history.AddUserMessage(prompt);
+
+            return await InvokeAgentAsync(criticKernel, modelNames[criticIdx], history);
+        }).ToArray();
 
         var critiques = await Task.WhenAll(critiqueTasks);
 
-        Log.Information("Grok's Critique:\n{c1}", critiques[0]);
-        Log.Information("ChatGPT's Critique:\n{c2}", critiques[1]);
-        Log.Information("Gemini's Critique:\n{c3}", critiques[2]);
+        for (int i = 0; i < critiques.Length; i++)
+            Log.Information("{name}'s Critiques:\n{content}", modelNames[i], critiques[i]);
 
         // ================================================
-        // 3. Final synthesis by Grok (or any model you prefer)
+        // 3. Final synthesis using the first kernel as judge
         // ================================================
-        Log.Information("\nStep 3: Final synthesis...");
+        Log.Information("\nStep 3: Final synthesis by {judge}...", modelNames[0]);
 
-        var synthesisPrompt = new ChatHistory();
-        synthesisPrompt.AddUserMessage($"""
+        var judgeKernel = kernels[0];
+
+        const string synthesisPromptTemplate = """
             You are the final synthesis engine.
-            Combine the best ideas from all three models into one superior answer.
+            Combine the best ideas from all models into one superior answer.
 
             Original question: {query}
 
-            Answer A (Grok):
-            {grokAnswer}
+            {answersSection}
 
-            Answer B (ChatGPT):
-            {chatGPTAnswer}
-
-            Answer C (Gemini):
-            {geminiAnswer}
-
-            Critique A (from Grok):
-            {critiques[0]}
-
-            Critique B (from ChatGPT):
-            {critiques[1]}
-
-            Critique C (from Gemini):
-            {critiques[2]}
+            {critiquesSection}
 
             Task:
             • Use the critiques to fix flaws and fill gaps.
@@ -135,15 +124,30 @@ public class MultiAgentThinkOrchestrator
             • Use headings, bullets, and tables where helpful.
 
             Begin directly with the final answer.
-            """);
+            """;
+
+        var answersSection = new StringBuilder();
+        for (int i = 0; i < answers.Length; i++)
+            answersSection.AppendLine($"Answer from {modelNames[i]}:\n{answers[i]}");
+
+        var critiquesSection = new StringBuilder();
+        for (int i = 0; i < critiques.Length; i++)
+            critiquesSection.AppendLine($"Critiques from {modelNames[i]}:\n{critiques[i]}");
+
+        var synthesisPrompt = new ChatHistory();
+        synthesisPrompt.AddUserMessage(synthesisPromptTemplate
+            .Replace("{query}", query)
+            .Replace("{answersSection}", "=== ANSWERS ===\n" + answersSection)
+            .Replace("{critiquesSection}", "=== CRITIQUES ===\n" + critiquesSection));
 
         var finalChunks = new List<ChatMessageContent>();
-        await foreach (var msg in new ChatCompletionAgent { Kernel = grokKernel }.InvokeAsync(synthesisPrompt))
+        await foreach (var msg in new ChatCompletionAgent { Kernel = judgeKernel }.InvokeAsync(synthesisPrompt))
             finalChunks.Add(msg);
 
-        var finalAnswer = finalChunks.LastOrDefault()?.Content?.Trim() ?? "[No output]";
+        var finalAnswer = string.Join("", finalChunks.Select(c => c.Content ?? "")).Trim();
 
-        //Log.Information("FINAL CONSOLIDATED ANSWER:\n\n{content}", finalAnswer);
+        Log.Information("FINAL CONSOLIDATED ANSWER:\n\n{content}", finalAnswer);
+
         return finalAnswer;
     }
 
@@ -154,44 +158,6 @@ public class MultiAgentThinkOrchestrator
         var result = new List<ChatMessageContent>();
         await foreach (var msg in agent.InvokeAsync(history))
             result.Add(msg);
-        return result.LastOrDefault()?.Content ?? "";
-    }
-
-    // Helper: Run critique
-    private static async Task<string> InvokeCritiqueAsync(Kernel kernel, string criticName,
-        string answer1, string answer2, string model1, string model2)
-    {
-        var prompt = $"""
-            You are an expert reasoning critic.
-            Your job: read the two answers below from other models.
-            For each:
-            • Identify any flaws in their chain of thought
-            • Point out factual errors or oversimplifications
-            • Suggest specific improvements
-            • Be constructive.
-
-            Format:
-            ### Critique of {model1}
-            - [point]
-
-            ### Critique of {model2}
-            - [point]
-
-            Answer 1 ({model1}):
-            {answer1}
-
-            Answer 2 ({model2}):
-            {answer2}
-            """;
-
-        var history = new ChatHistory();
-        history.AddUserMessage(prompt);
-
-        var agent = new ChatCompletionAgent { Kernel = kernel };
-        var result = new List<ChatMessageContent>();
-        await foreach (var msg in agent.InvokeAsync(history))
-            result.Add(msg);
-
-        return result.LastOrDefault()?.Content ?? "";
+        return result.LastOrDefault()?.Content?.Trim() ?? "";
     }
 }
