@@ -5,7 +5,7 @@
 		<TargetFramework>net9.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-		<NoWarn>SKEXP0110</NoWarn>
+		<NoWarn>SKEXP0110;SKEXP0050</NoWarn>
 		<IncludePrerelease>true</IncludePrerelease>
 	</PropertyGroup>
 
@@ -16,6 +16,7 @@
 		<PackageReference Include="Microsoft.SemanticKernel.Agents.Runtime.InProcess" Version="1.68.0-preview" />
 		<PackageReference Include="Microsoft.SemanticKernel.Connectors.Google" Version="1.68.0-alpha" />
 		<PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.68.0" />
+		<PackageReference Include="Microsoft.SemanticKernel.Plugins.Web" Version="1.68.0-alpha" />
 		<PackageReference Include="Serilog.Extensions.Logging" Version="9.0.0" />
 		<PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
 		<PackageReference Include="Serilog.Sinks.Debug" Version="3.0.0" />
