@@ -14,14 +14,16 @@ public class GrokCompletionService : IChatCompletionService
 {
     private readonly HttpClient _client;
     private readonly string _apiKey;
+    private readonly string _modelName;
 
-    public GrokCompletionService(string grokApiKey)
+    public GrokCompletionService(string grokApiKey, string modelName)
     {
         _apiKey = grokApiKey;
+        _modelName = modelName;
         _client = new HttpClient { BaseAddress = new Uri("https://api.x.ai/v1/") };
     }
 
-    public IReadOnlyDictionary<string, object?> Attributes => new Dictionary<string, object?> { { "Model", "grok-4-1-fast-non-reasoning" } };
+    public IReadOnlyDictionary<string, object?> Attributes => new Dictionary<string, object?> { { "Model", _modelName } };
 
     public async Task<IReadOnlyList<ChatMessageContent>> GetChatMessageContentsAsync(ChatHistory chatHistory, PromptExecutionSettings? executionSettings = null, Kernel? kernel = null, CancellationToken cancellationToken = default)
     {
