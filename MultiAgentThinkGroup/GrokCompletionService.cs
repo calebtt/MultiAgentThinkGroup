@@ -15,9 +15,9 @@ public class GrokCompletionService : IChatCompletionService
     private readonly HttpClient _client;
     private readonly string _apiKey;
 
-    public GrokCompletionService()
+    public GrokCompletionService(string grokApiKey)
     {
-        _apiKey = Environment.GetEnvironmentVariable("GROK_API_KEY") ?? throw new InvalidOperationException("GROK_API_KEY not set.");
+        _apiKey = grokApiKey;
         _client = new HttpClient { BaseAddress = new Uri("https://api.x.ai/v1/") };
     }
 
