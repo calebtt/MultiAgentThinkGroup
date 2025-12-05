@@ -40,8 +40,8 @@ public class MultiAgentThinkOrchestrator
         Log.Information("Step 1: Generating {count} independent answers in parallel...", kernels.Count);
 
         const string initialPrompt = """
-            Answer the user's question with clear, step-by-step reasoning.
-            Show your full chain of thought.
+            Answer the user's question with clear, step-by-step reasoning steps.
+            Show your full reasoning.
             At the end, write "### FINAL ANSWER" followed by your complete, polished response.
             """;
 
@@ -65,7 +65,7 @@ public class MultiAgentThinkOrchestrator
             You are an expert reasoning critic.
             Read the answers below from other models.
             For each:
-            • Identify flaws in chain of thought (missing steps, weak assumptions, logical gaps)
+            • Identify flaws in their reasoning steps (missing steps, weak assumptions, logical gaps)
             • Point out factual errors or oversimplifications
             • Suggest specific improvements
             • Be constructive and precise.

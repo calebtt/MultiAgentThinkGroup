@@ -35,7 +35,7 @@ public class GrokCompletionService : IChatCompletionService
                 content = new[] { new { type = "text", text = m.Content ?? "" } }  // Wrap content in array; use empty string if null
             }).ToArray();
 
-            var payload = new { model = "grok-4-1-fast-reasoning", messages };
+            var payload = new { model = _modelName, messages };
             var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
             _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
 

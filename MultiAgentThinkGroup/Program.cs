@@ -52,7 +52,10 @@ class Program
 
         var query = "How can I design a thinking model comprised of the top LLM API providers' models? " +
             "I mean Grok, ChatGPT and Gemini for the APIs. " +
-            "I have no control over the enterprise models' design or function, but still want to combine them into a better model.";
+            "I have no control over the enterprise models' design or function, but still want to combine them into a better model." +
+            "The entire point is to treat all of them as one thinking model. " +
+            "Cost savings isn't super relevant because quality is the goal. " +
+            "Critiqued reasoning steps and synthesis of output is what we want, with the models checking the output of each other.";
 
         var finalAnswer = await orchestrator.RunInferenceAsync(query, kernels);
 
