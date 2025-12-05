@@ -21,7 +21,7 @@ public class GrokCompletionService : IChatCompletionService
         _client = new HttpClient { BaseAddress = new Uri("https://api.x.ai/v1/") };
     }
 
-    public IReadOnlyDictionary<string, object?> Attributes => new Dictionary<string, object?> { { "Model", "grok-4-1-fast-reasoning" } };
+    public IReadOnlyDictionary<string, object?> Attributes => new Dictionary<string, object?> { { "Model", "grok-4-1-fast-non-reasoning" } };
 
     public async Task<IReadOnlyList<ChatMessageContent>> GetChatMessageContentsAsync(ChatHistory chatHistory, PromptExecutionSettings? executionSettings = null, Kernel? kernel = null, CancellationToken cancellationToken = default)
     {
