@@ -47,16 +47,13 @@ public record StructuredResponse(
                     description = "Optional list of sources or URLs, if any."
                 }
             },
-            // reasoning and sources are optional; final_answer + confidence are required
             required = new[] { "final_answer", "confidence" },
-            // you *can* keep this for xAI; Gemini doesn't need to see it
             additionalProperties = false
         },
         strict = true
     };
 
-    // Core JSON Schema – plain object, no xAI wrapper, no $ref, only basic fields that Gemini supports.
-    // This is what we’ll give to Gemini *and* use for OpenAI’s structured output.
+    // Core JSON Schema – plain object, no xAI wrapper.
     private const string CoreSchemaJson = """
     {
       "type": "object",
@@ -83,10 +80,20 @@ public record StructuredResponse(
     """;
 
     /// <summary>
-    /// Plain JSON schema as JsonElement, used *as-is* for Gemini and OpenAI.
+    /// Plain JSON schema as JsonElement, used *as-is* for Gemini (response_schema).
     /// </summary>
     public static JsonElement GetCoreJsonSchemaElement()
         => JsonDocument.Parse(CoreSchemaJson).RootElement.Clone();
+
+    /// <summary>
+    /// OpenAI / ChatGPT structured-output format wrapper around the core schema.
+    /// This becomes the 'response_format' for OpenAI.
+    /// </summary>
+    public static ChatResponseFormat GetOpenAiResponseFormat()
+        => ChatResponseFormat.ForJsonSchema(
+            GetCoreJsonSchemaElement(),
+            schemaName: "structured_response",
+            schemaDescription: "Structured response with reasoning, final_answer, confidence, and optional sources.");
 }
 
 public class StructuredResponseEventArgs : EventArgs

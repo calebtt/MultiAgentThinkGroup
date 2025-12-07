@@ -5,11 +5,48 @@ namespace Microsoft.SemanticKernel.Connectors.Grok;
 
 public class GrokPromptExecutionSettings : PromptExecutionSettings
 {
+    /// <summary>
+    /// Controls if / how tools are used (matches your existing behavior).
+    /// </summary>
     public GrokToolCallBehavior? ToolCallBehavior { get; set; }
 
     /// <summary>
+    /// Sampling temperature. Higher = more random. Typically 0.0–1.0.
+    /// Maps to 'temperature'.
+    /// </summary>
+    public double? Temperature { get; set; }
+
+    /// <summary>
+    /// Nucleus sampling probability. Maps to 'top_p'.
+    /// </summary>
+    public double? TopP { get; set; }
+
+    /// <summary>
+    /// Maximum number of tokens to generate. Maps to 'max_tokens'.
+    /// </summary>
+    public int? MaxTokens { get; set; }
+
+    /// <summary>
+    /// Stop sequences where the model should stop generating.
+    /// Maps to 'stop'.
+    /// </summary>
+    public IList<string>? StopSequences { get; set; }
+
+    /// <summary>
+    /// Presence penalty (-2..2) to encourage new topics.
+    /// Maps to 'presence_penalty'.
+    /// </summary>
+    public double? PresencePenalty { get; set; }
+
+    /// <summary>
+    /// Frequency penalty (-2..2) to discourage repetition.
+    /// Maps to 'frequency_penalty'.
+    /// </summary>
+    public double? FrequencyPenalty { get; set; }
+
+    /// <summary>
     /// Number of candidates (choices) to generate, if supported by the model.
-    /// Maps to the 'n' field in the xAI chat/completions API.
+    /// Maps to 'n'.
     /// </summary>
     public int? CandidateCount { get; set; } = 1;
 
@@ -29,6 +66,7 @@ public class GrokPromptExecutionSettings : PromptExecutionSettings
     /// </summary>
     public object? StructuredOutputSchema { get; set; }
 }
+
 
 public static class GrokPromptExecutionSettingsExtensions
 {

@@ -77,14 +77,32 @@ public sealed class GrokChatCompletionService : IChatCompletionService
             return grok;
         }
 
-        // Start with minimal Grok settings
         var grokSettings = new GrokPromptExecutionSettings();
 
-        // Bridge OpenAI-style ToolCallBehavior to GrokToolCallBehavior
-        if (executionSettings is OpenAIPromptExecutionSettings openAi &&
-            openAi.ToolCallBehavior != null)
+        // Bridge OpenAI-style settings where it makes sense.
+        if (executionSettings is OpenAIPromptExecutionSettings openAi)
         {
-            grokSettings.ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions;
+            // Tool calling
+            if (openAi.ToolCallBehavior != null)
+            {
+                grokSettings.ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions;
+            }
+
+            // Sampling / generation controls
+            grokSettings.Temperature = openAi.Temperature;
+            grokSettings.TopP = openAi.TopP;
+            grokSettings.MaxTokens = openAi.MaxTokens;
+            grokSettings.StopSequences = openAi.StopSequences is null
+                ? null
+                : new List<string>(openAi.StopSequences);
+            grokSettings.PresencePenalty = openAi.PresencePenalty;
+            grokSettings.FrequencyPenalty = openAi.FrequencyPenalty;
+
+            // NOTE: there is no openAi.CandidateCount in SK,
+            // so we do NOT map grokSettings.CandidateCount here.
+            // If you want multiple choices from Grok, set
+            // GrokPromptExecutionSettings.CandidateCount explicitly
+            // when you construct it.
         }
 
         return grokSettings;

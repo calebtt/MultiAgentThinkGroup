@@ -8,14 +8,18 @@ using Microsoft.SemanticKernel.Connectors.Grok;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Plugins.Web;
 using Microsoft.SemanticKernel.Plugins.Web.Google;
+using MultiAgentThinkGroup;
+
+
+//using OpenAI.Chat;
 using Serilog;
 using Serilog.Events;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
-using MultiAgentThinkGroup;
-using OpenAI.Chat;
 
 
 class Program
@@ -72,9 +76,9 @@ class Program
 
         //Log.Information("Response from LlmChat:\n\n{content}", response);
 
-        await SingleStructuredTest(CreateGrokAgent(grokKernel), "Grok", query);
+        //await SingleStructuredTest(CreateGrokAgent(grokKernel), "Grok", query);
         //await SingleStructuredTest(CreateGeminiAgent(geminiKernel), "Gemini", query);
-        //await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
+        await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
 
         //await SingleKernelTest(orchestrator, chatGPTKernel, "ChatGPT", query, 1);
         //await SingleKernelTest(orchestrator, geminiKernel, "Gemini", query, 2);
@@ -116,7 +120,10 @@ class Program
         {
             ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
             StructuredOutputMode = GrokStructuredOutputMode.JsonSchema,
-            StructuredOutputSchema = StructuredResponse.GetXaiSchema()
+            StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
+            // Reasoning effort level only supported on old models from xAI,
+            // model choice denotes reasoning level.
+            MaxTokens = 5000
         })
     };
 
@@ -126,12 +133,15 @@ class Program
         Instructions = "Answer the user.",
         Arguments = new(new GeminiPromptExecutionSettings
         {
-            ResponseSchema = StructuredResponse.GetCoreJsonSchemaElement(),
+            //ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
             ResponseMimeType = "application/json",
-            ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
-            MaxTokens = 1000
+            // Let SK generate the JSON Schema for Gemini
+            ResponseSchema = typeof(StructuredResponse),
+            MaxTokens = 5000,
+            ThinkingConfig = new() { ThinkingLevel = "low" }
         })
     };
+
 
     private static ChatCompletionAgent CreateChatGPTAgent(Kernel kernel) => new()
     {
@@ -139,9 +149,11 @@ class Program
         Instructions = "Answer the user.",
         Arguments = new(new OpenAIPromptExecutionSettings
         {
-            ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
-            ResponseFormat = StructuredResponse.GetCoreJsonSchemaElement(),
-            MaxTokens = 1000
+            //ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
+            // Let SK generate JSON Schema for StructuredResponse
+            ResponseFormat = typeof(StructuredResponse),
+            MaxTokens = 5000,
+            ReasoningEffort = "low"
         })
     };
 
@@ -149,10 +161,59 @@ class Program
     {
         var history = new ChatHistory();
         history.AddUserMessage(query);
-        await foreach (var response in agent.InvokeAsync(history))
-        {
-            Log.Information("Response from {name} Agent:\n\n{content}", name, response.Message);
-        }
 
+        try
+        {
+            await foreach (var response in agent.InvokeAsync(history))
+            {
+                var msg = response.Message;
+
+                if (msg is ChatMessageContent chat)
+                {
+                    // Try the convenience Content property first
+                    var text = chat.Content;
+
+                    // If Content is null/empty, fall back to TextContent items
+                    if (string.IsNullOrWhiteSpace(text) && chat.Items is { Count: > 0 })
+                    {
+                        var sb = new StringBuilder();
+                        foreach (var item in chat.Items)
+                        {
+                            if (item is TextContent t && !string.IsNullOrEmpty(t.Text))
+                            {
+                                sb.Append(t.Text);
+                            }
+                        }
+
+                        if (sb.Length > 0)
+                        {
+                            text = sb.ToString();
+                        }
+                    }
+
+                    // Final fallback: serialize the whole ChatMessageContent if we still have nothing
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        text = JsonSerializer.Serialize(chat, new JsonSerializerOptions
+                        {
+                            WriteIndented = true
+                        });
+                    }
+
+                    Log.Information("Response from {name} Agent:\n\n{content}", name, text);
+                }
+                else
+                {
+                    // Non-chat or unexpected type
+                    Log.Information("Response from {name} Agent (non-chat message):\n\n{@message}", name, msg);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error while invoking {name} Agent", name);
+        }
     }
+
+
 }

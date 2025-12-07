@@ -101,8 +101,15 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             messages = grokRequest.Messages,
             tools = grokRequest.Tools,
             stream = false,
-            // xAI-specific bits:
+            // New generation controls:
             n = executionSettings?.CandidateCount,
+            temperature = executionSettings?.Temperature,
+            top_p = executionSettings?.TopP,
+            max_tokens = executionSettings?.MaxTokens,
+            stop = executionSettings?.StopSequences,
+            presence_penalty = executionSettings?.PresencePenalty,
+            frequency_penalty = executionSettings?.FrequencyPenalty,
+            // xAI-specific bits:
             xai_structured_output_mode = structuredMode,
             response_format = responseFormat
         };
@@ -223,12 +230,19 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             model = this._modelId,
             messages = grokRequest.Messages,
             tools = grokRequest.Tools,
-            stream = true, // streaming mode
+            stream = true,
+            // New generation controls:
             n = executionSettings?.CandidateCount,
+            temperature = executionSettings?.Temperature,
+            top_p = executionSettings?.TopP,
+            max_tokens = executionSettings?.MaxTokens,
+            stop = executionSettings?.StopSequences,
+            presence_penalty = executionSettings?.PresencePenalty,
+            frequency_penalty = executionSettings?.FrequencyPenalty,
+            // xAI-specific bits:
             xai_structured_output_mode = structuredMode,
             response_format = responseFormat
         };
-
 
         var request = await CreateHttpRequestAsync(requestData, _chatGenerationEndpoint, cancellationToken)
             .ConfigureAwait(false);
