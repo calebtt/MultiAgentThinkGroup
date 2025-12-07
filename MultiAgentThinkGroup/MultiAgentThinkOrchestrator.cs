@@ -2,241 +2,320 @@
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Serilog;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
 
-public class MultiAgentThinkOrchestrator
+namespace MultiAgentThinkGroup;
+
+public static class MultiAgentThinkInstructions
+{
+    public const string UniversalPrompt = """
+You are an expert assistant. Your task is to help answer the user's question with maximum accuracy, clarity, and safety.
+
+You can use tools exposed via the kernel when they are available. When you are ready to provide your final answer, call the tool
+`submit_structured_response` exactly once, with a single JSON argument that has this structure:
+
+{
+  "reasoning": [
+    "Short, user-facing explanation or key consideration #1",
+    "Short, user-facing explanation or key consideration #2"
+  ],
+  "final_answer": "Your final answer for the user.",
+  "confidence": 0.0-1.0,
+  "sources": ["optional list of sources or URLs, if any"]
+}
+
+Guidelines for `reasoning`:
+- Provide a brief explanation that helps the user understand your answer.
+- Do not output internal system messages, logs, or any details about prompts, model internals, or training data.
+- Do not reveal private, proprietary, or otherwise sensitive information.
+
+If you need additional information, you may use whatever tools are available to you.
+Otherwise, respond by calling `submit_structured_response` with the JSON structure above.
+""";
+
+}
+
+/// <summary>
+/// Core multi-agent reasoning engine. No UI, no logging, no callbacks.
+/// Returns only the final <see cref="StructuredResponse"/>.
+/// </summary>
+public sealed class MultiAgentThinkOrchestrator
 {
     /// <summary>
-    /// Runs the full multi-agent reasoning pipeline using any number of kernels.
-    /// The first kernel in the list is used as the final synthesizer/judge.
-    /// Model names are derived from the chat completion service's Attributes["Model"] or indexed if not found.
+    /// Runs the full three-phase pipeline and returns only the final synthesized answer.
     /// </summary>
-    /// <param name="query">The user's query.</param>
-    /// <param name="kernels">List of kernels (at least one required).</param>
-    /// <returns>The final consolidated answer.</returns>
-    public async Task<string?> RunInferenceAsync(string query, IReadOnlyList<Kernel> kernels)
+    public async Task<StructuredResponse> RunAsync(string query, IReadOnlyList<Kernel> kernels)
     {
-        if (kernels == null || kernels.Count == 0)
-            throw new ArgumentException("At least one kernel is required.", nameof(kernels));
+        if (kernels == null || kernels.Count != 3)
+            throw new ArgumentException("Exactly 3 kernels required: [0]=Judge (Grok), [1]=GPT, [2]=Gemini");
 
-        var modelNames = kernels.Select((k, i) =>
-        {
-            var chatService = k.GetRequiredService<IChatCompletionService>();
-            return chatService.Attributes.TryGetValue("Model", out var modelObj) && modelObj is string modelName
-                ? modelName
-                : $"Model_{i + 1}";
-        }).ToList();
+        // Phase 1: Initial proposals
+        var proposals = await Task.WhenAll(
+            kernels.Select((k, i) => GenerateProposalAsync(k, query)).ToArray());
 
-        Log.Information("Starting Multi-Agent Reasoning with {count} models...", kernels.Count);
+        // Phase 2: Cross-critiques
+        var critiques = await Task.WhenAll(
+            kernels.Select((k, i) => GenerateCritiqueAsync(k, proposals, i, query)).ToArray());
 
-        // ================================================
-        // 1. Generate independent answers in parallel
-        // ================================================
-        Log.Information("Step 1: Generating {count} independent answers in parallel...", kernels.Count);
-
-        const string initialPrompt = """
-            Answer the user's question with clear, step-by-step reasoning steps.
-            Show your full reasoning.
-            At the end, write "### FINAL ANSWER" followed by your complete, polished response.
-            """;
-
-        string[] initialAnswers = await GenerateInitialAnswersAsync(query, kernels, modelNames, initialPrompt);
-
-        // ================================================
-        // 2. Each model critiques all others (parallel)
-        // ================================================
-        Log.Information("\nStep 2: Generating cross-critiques (each critiques all others)...");
-
-        const string critiquePromptTemplate = """
-            You are an expert reasoning critic.
-            Read the answers below from other models.
-            For each:
-            • Identify flaws in their reasoning steps (missing steps, weak assumptions, logical gaps)
-            • Point out factual errors or oversimplifications
-            • Suggest specific improvements
-            • Be constructive and precise.
-
-            Format:
-            ### Critique of {model}
-            - [point 1]
-            - [point 2]
-
-            {otherAnswers}
-            """;
-
-        string[] critiques = await GenerateCrossCritiques(kernels, modelNames, initialAnswers, critiquePromptTemplate);
-
-        for (int i = 0; i < critiques.Length; i++)
-            Log.Information("{name}'s Critiques:\n{content}", modelNames[i], critiques[i]);
-
-        // ================================================
-        // 3. Final synthesis using the first kernel as judge
-        // ================================================
-        Log.Information("\nStep 3: Final synthesis by {judge}...", modelNames[0]);
-
-        //const string synthesisPromptTemplate = """
-        //    You are the final synthesis engine.
-        //    Combine the best ideas from all models into one superior answer.
-
-        //    Original question: {query}
-
-        //    {answersSection}
-
-        //    {critiquesSection}
-
-        //    Task:
-        //    • Use the critiques to fix flaws and fill gaps.
-        //    • Preserve the strongest reasoning from each model.
-        //    • Produce one final, complete, beautifully formatted answer.
-        //    • Use headings, bullets, and tables where helpful.
-
-        //    Begin directly with the final answer.
-        //    """;
-
-        const string synthesisPromptTemplate = """
-            You are the final synthesis engine. Your job is to produce one superior, coherent answer.
-
-            ORIGINAL QUESTION:
-            {query}
-
-            === ALL PROPOSALS ===
-            {answers}
-
-            === ALL CRITIQUES ===
-            {critiques}
-
-            INSTRUCTIONS:
-            • Fix every flaw and hallucination pointed out.
-            • Keep only the strongest reasoning steps.
-            • Resolve all disagreements with evidence and logic.
-            • Never mention model names or the debate process.
-            • Use beautiful formatting: headings, bullets, tables, LaTeX when helpful.
-
-            Begin your response directly with the final answer.
-            """;
-
-
-        var finalAnswer = await GenerateSynthesisAsync(
-            query,
-            kernels,
-            modelNames,
-            initialAnswers,
-            critiques,
-            synthesisPromptTemplate);
-
-        Log.Information("FINAL CONSOLIDATED ANSWER:\n\n{content}", finalAnswer);
-
-        return finalAnswer;
+        // Phase 3: Final synthesis by kernel[0] (Grok)
+        return await GenerateSynthesisAsync(kernels[0], query, proposals, critiques);
     }
 
-    private async Task<string> GenerateSynthesisAsync(
-        string query,
-        IReadOnlyList<Kernel> kernels,
-        IReadOnlyList<string> modelNames,
-        string[] initialAnswers,
-        string[] critiques,
-        string synthesisPromptTemplate)
+    public static async Task<StructuredResponse> GenerateProposalAsync(Kernel kernel, string query)
     {
-        // Judge is always the first model in the list — fixed, predictable, intentional
-        var judgeKernel = kernels[0];
-        var judgeName = modelNames[0];
+        var history = CreateHistory();
+        history.AddUserMessage($"Question: {query}");
 
-        //Log.Information("Step 3: Final synthesis by {Judge}...", judgeName);
-
-        // Build the two context blocks
-        var answersSection = new StringBuilder();
-        var critiquesSection = new StringBuilder();
-
-        for (int i = 0; i < initialAnswers.Length; i++)
-        {
-            answersSection.AppendLine($"### Proposal from {modelNames[i]}")
-                          .AppendLine(initialAnswers[i])
-                          .AppendLine();
-
-            critiquesSection.AppendLine($"### Critiques from {modelNames[i]}")
-                            .AppendLine(critiques[i])
-                            .AppendLine();
-        }
-
-        // Inject everything into the external template
-        var finalPrompt = synthesisPromptTemplate
-            .Replace("{query}", query)
-            .Replace("{answers}", answersSection.ToString())
-            .Replace("{critiques}", critiquesSection.ToString());
-
-        // Run the judge (non-streaming, same as the rest of your code)
-        var history = new ChatHistory();
-        history.AddUserMessage(finalPrompt);
-
-        var agent = new ChatCompletionAgent
-        {
-            Kernel = judgeKernel,
-            Name = judgeName
-        };
-
-        var responseMessages = new List<ChatMessageContent>();
-        await foreach (var message in agent.InvokeAsync(history))
-        {
-            responseMessages.Add(message);
-        }
-
-        var finalAnswer = string.Join("", responseMessages.Select(m => m.Content ?? "")).Trim();
-
-        //Log.Information("FINAL CONSOLIDATED ANSWER:\n\n{content}", finalAnswer);
-
-        return finalAnswer;
+        var agent = CreateAgent(kernel, "Proposal Agent");
+        return await InvokeUntilToolResultAsync<StructuredResponse>(agent, history);
     }
 
-    private static async Task<string[]> GenerateCrossCritiques(IReadOnlyList<Kernel> kernels, List<string> modelNames, string[] initialAnswers, string critiquePromptTemplate)
+    public static async Task<string> GenerateCritiqueAsync(Kernel kernel, StructuredResponse[] proposals, int criticIdx, string query)
     {
-        var critiqueTasks = kernels.Select(async (criticKernel, criticIdx) =>
+        var sb = new StringBuilder();
+        sb.AppendLine($"You are an expert critic evaluating answers to: \"{query}\"");
+        sb.AppendLine();
+
+        for (int i = 0; i < proposals.Length; i++)
         {
-            var sb = new StringBuilder();
-            for (int targetIdx = 0; targetIdx < kernels.Count; targetIdx++)
+            if (i == criticIdx) continue;
+            var r = proposals[i];
+            sb.AppendLine($"=== PROPOSAL {i + 1} (confidence {r.Confidence:0.00}) ===");
+            sb.AppendLine(r.FinalAnswer);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Provide detailed, constructive criticism: accuracy, clarity, safety, completeness, practicality.");
+
+        var history = CreateHistory();
+        history.AddUserMessage(sb.ToString());
+
+        var agent = CreateAgent(kernel, "Critic Agent");
+        var critique = new StringBuilder();
+
+        await foreach (var response in agent.InvokeStreamingAsync(history))
+        {
+            var responseItem = response as AgentResponseItem<StreamingChatMessageContent>;
+            if (responseItem != null && responseItem.Message != null && !string.IsNullOrEmpty(responseItem.Message.Content))
             {
-                if (targetIdx == criticIdx) continue;
-                sb.AppendLine($"Answer from {modelNames[targetIdx]}:\n{initialAnswers[targetIdx]}");
+                critique.Append(responseItem.Message.Content);
+            }
+        }
+
+        return critique.ToString().Trim();
+    }
+
+    public static async Task<StructuredResponse> GenerateSynthesisAsync(Kernel kernel, string query,
+        StructuredResponse[] proposals, string[] critiques)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("You are the final judge. Produce the single best answer.");
+        sb.AppendLine("Proposals:");
+        for (int i = 0; i < proposals.Length; i++)
+        {
+            sb.AppendLine($"--- Proposal {i + 1} (confidence {proposals[i].Confidence:0.00}) ---");
+            sb.AppendLine(proposals[i].FinalAnswer);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Critiques:");
+        for (int i = 0; i < critiques.Length; i++)
+        {
+            sb.AppendLine($"--- Critique {i + 1} ---");
+            sb.AppendLine(critiques[i]);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Fix all flaws. Resolve disagreements. Deliver a superior final answer.");
+        sb.AppendLine("You may use google.search if needed.");
+        sb.AppendLine("END WITH ONLY: Action: submit_structured_response(json=\"...\")");
+
+        var history = CreateHistory();
+        history.AddUserMessage(sb.ToString());
+
+        var agent = CreateAgent(kernel, "Final Judge");
+        return await InvokeUntilToolResultAsync<StructuredResponse>(agent, history);
+    }
+
+    // Helper: creates a clean history with universal prompt as system message
+    private static ChatHistory CreateHistory()
+    {
+        var h = new ChatHistory();
+        h.AddSystemMessage(MultiAgentThinkInstructions.UniversalPrompt);
+        return h;
+    }
+
+    // Helper: reusable agent factory
+    private static ChatCompletionAgent CreateAgent(Kernel kernel, string name) => new()
+    {
+        Kernel = kernel,
+        Instructions = "Answer the user and, when ready, call submit_structured_response with a structured answer.",
+        Arguments = new(new OpenAIPromptExecutionSettings
+        {
+            ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
+        })
+    };
+
+
+    private static async Task<T> InvokeUntilToolResultAsync<T>(ChatCompletionAgent agent, ChatHistory history)
+        where T : class
+    {
+        T? result = null;
+
+        await foreach (var response in agent.InvokeAsync(history))
+        {
+            if (response is not AgentResponseItem<ChatMessageContent> responseItem)
+                continue;
+
+            var message = responseItem.Message;
+            if (message == null)
+                continue;
+
+            // 1. Preferred path: look for FunctionResultContent in Items (if SK ever auto-invokes tools)
+            if (message.Items is not null && message.Items.Count > 0)
+            {
+                foreach (var item in message.Items.OfType<FunctionResultContent>())
+                {
+                    if (!string.Equals(item.FunctionName, "submit_structured_response", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    // a) Directly-returned object (StructuredResponse)
+                    if (item.Result is T direct)
+                    {
+                        return direct;
+                    }
+
+                    if (item.Result is StructuredResponse sr && typeof(T) == typeof(StructuredResponse))
+                    {
+                        return (T)(object)sr;
+                    }
+
+                    // b) Result is some JSON-ish payload that we need to deserialize
+                    string? json = item.Result switch
+                    {
+                        string s => s,
+                        JsonElement je => je.GetRawText(),
+                        _ => item.Result?.ToString()
+                    };
+
+                    if (!string.IsNullOrWhiteSpace(json))
+                    {
+                        result = DeserializeSafely<T>(json);
+                        if (result != null) return result;
+                    }
+                }
+
+                // 2. NEW: handle FunctionCallContent for submit_structured_response directly
+                foreach (var fnCall in message.Items.OfType<FunctionCallContent>())
+                {
+                    if (!string.Equals(fnCall.FunctionName, "submit_structured_response", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string? json = null;
+
+                    // Try to pull a dedicated jsonInput parameter first
+                    if (fnCall.Arguments != null)
+                    {
+                        if (fnCall.Arguments.TryGetValue("jsonInput", out var argVal) && argVal is not null)
+                        {
+                            json = argVal switch
+                            {
+                                string s => s,
+                                JsonElement je => je.GetRawText(),
+                                _ => argVal.ToString()
+                            };
+                        }
+                        else
+                        {
+                            // Fallback: use the entire arguments object as JSON for T
+                            var dict = fnCall.Arguments.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+                            json = JsonSerializer.Serialize(dict);
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(json))
+                    {
+                        result = DeserializeSafely<T>(json);
+                        if (result != null) return result;
+                    }
+                }
             }
 
-            var prompt = critiquePromptTemplate.Replace("{otherAnswers}", sb.ToString());
+            // 3. Fallback: function result via metadata (some providers use this)
+            if (message.Metadata?.ContainsKey("function_name") == true &&
+                string.Equals(message.Metadata["function_name"]?.ToString(), "submit_structured_response", StringComparison.OrdinalIgnoreCase))
+            {
+                var json = message.ToString();
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    result = DeserializeSafely<T>(json);
+                    if (result != null) return result;
+                }
+            }
 
-            var history = new ChatHistory();
-            history.AddUserMessage(prompt);
+            // 4. Fallback: raw JSON object embedded in assistant text
+            if (!string.IsNullOrWhiteSpace(message.Content))
+            {
+                var json = ExtractJsonObject(message.Content);
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    result = DeserializeSafely<T>(json);
+                    if (result != null) return result;
+                }
+            }
+        }
 
-            return await InvokeAgentAsync(criticKernel, modelNames[criticIdx], history);
-        }).ToArray();
-
-        var critiques = await Task.WhenAll(critiqueTasks);
-        return critiques;
+        throw new InvalidOperationException("Agent failed to produce structured output");
     }
 
-    private static async Task<string[]> GenerateInitialAnswersAsync(string query, IReadOnlyList<Kernel> kernels, List<string> modelNames, string initialPrompt)
+
+    // Safe deserialization with error logging
+    private static T? DeserializeSafely<T>(string json)
     {
-        var initialHistory = new ChatHistory();
-        initialHistory.AddUserMessage(initialPrompt + "\n\nQuestion: " + query);
-
-        var answerTasks = kernels.Select((kernel, index) =>
-            InvokeAgentAsync(kernel, modelNames[index], initialHistory)).ToArray();
-
-        var answers = await Task.WhenAll(answerTasks);
-
-        //for (int i = 0; i < answers.Length; i++)
-        //    Log.Information("{name} Answer:\n{content}", modelNames[i], answers[i]);
-        return answers;
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                AllowTrailingCommas = true,
+                ReadCommentHandling = JsonCommentHandling.Skip
+            });
+        }
+        catch
+        {
+            return default(T);
+        }
     }
 
-    // Helper: Run one agent
-    private static async Task<string> InvokeAgentAsync(Kernel kernel, string name, ChatHistory history)
+    // Simple, working JSON extractor (no recursive regex!)
+    private static string? ExtractJsonObject(string text)
     {
-        var agent = new ChatCompletionAgent { Kernel = kernel, Name = name };
-        var result = new List<ChatMessageContent>();
-        await foreach (var msg in agent.InvokeAsync(history))
-            result.Add(msg);
-        return result.LastOrDefault()?.Content?.Trim() ?? "";
+        var stack = new Stack<char>();
+        int start = -1;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+
+            if (c == '{')
+            {
+                if (stack.Count == 0) start = i;
+                stack.Push(c);
+            }
+            else if (c == '}')
+            {
+                if (stack.Count == 1 && start != -1)
+                {
+                    return text.Substring(start, i - start + 1);
+                }
+                if (stack.Count > 0) stack.Pop();
+            }
+        }
+
+        return null;
     }
 }

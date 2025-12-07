@@ -1,0 +1,70 @@
+﻿<Window x:Class="MultiAgentWPF.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+        mc:Ignorable="d" 
+        Title="Multi-Agent Reasoning Engine" Height="900" Width="1400"
+        Background="#1e1e1e" Foreground="White" FontFamily="Consolas">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="2*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Grok Column -->
+        <Border Grid.Column="0" Background="#2d2d2d" Margin="5" Padding="10" CornerRadius="8">
+            <StackPanel>
+                <TextBlock Text="GROK (Judge)" FontWeight="Bold" Foreground="#00ff9d" FontSize="16"/>
+                <TextBlock x:Name="GrokThought" Margin="0 10 0 0" TextWrapping="Wrap"/>
+                <TextBlock x:Name="GrokAction" Foreground="#ff6b6b"/>
+                <TextBlock x:Name="GrokObservation" Foreground="#4ecdc4"/>
+            </StackPanel>
+        </Border>
+
+        <!-- GPT Column -->
+        <Border Grid.Column="1" Background="#2d2d2d" Margin="5" Padding="10" CornerRadius="8">
+            <StackPanel>
+                <TextBlock Text="GPT-4o" FontWeight="Bold" Foreground="#ff9e00" FontSize="16"/>
+                <TextBlock x:Name="GptThought" Margin="0 10 0 0" TextWrapping="Wrap"/>
+                <TextBlock x:Name="GptAction" Foreground="#ff6b6b"/>
+                <TextBlock x:Name="GptObservation" Foreground="#4ecdc4"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Gemini Column -->
+        <Border Grid.Column="2" Background="#2d2d2d" Margin="5" Padding="10" CornerRadius="8">
+            <StackPanel>
+                <TextBlock Text="GEMINI 1.5 Pro" FontWeight="Bold" Foreground="#4285f4" FontSize="16"/>
+                <TextBlock x:Name="GeminiThought" Margin="0 10 0 0" TextWrapping="Wrap"/>
+                <TextBlock x:Name="GeminiObservation" Foreground="#4ecdc4"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Final Answer Column -->
+        <Border Grid.Column="3" Background="#252526" Margin="5" Padding="15" CornerRadius="8">
+            <ScrollViewer>
+                <StackPanel>
+                    <TextBlock Text="FINAL SYNTHESIS" FontWeight="Bold" FontSize="18" Foreground="#00ff9d"/>
+                    <TextBlock x:Name="FinalConfidence" FontSize="14" Foreground="#ffd700"/>
+                    <TextBlock x:Name="FinalAnswer" Margin="0 10 0 0" TextWrapping="Wrap" FontSize="15"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Input Bar (Docked Bottom) -->
+        <Border Background="#007acc" VerticalAlignment="Bottom" Height="80" Padding="10" Grid.ColumnSpan="4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="120" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="UserInput" Background="#1e1e1e" Foreground="White" FontSize="16" AcceptsReturn="False" />
+                <Button Grid.Column="1" Content="Send" Background="#00ff9d" Foreground="Black" FontWeight="Bold" Click="Send_Click"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
