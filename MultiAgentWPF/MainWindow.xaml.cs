@@ -70,10 +70,10 @@ namespace MultiAgentWPF  // Update to your namespace
                 geminiKernel.Plugins.AddFromObject(google, "google");
 
                 // Also add structured output plugin
-                var structuredPlugin = KernelPluginFactory.CreateFromType<StructuredOutputPlugin>();
-                grokKernel.Plugins.Add(structuredPlugin);
-                chatGPTKernel.Plugins.Add(structuredPlugin);
-                geminiKernel.Plugins.Add(structuredPlugin);
+                //var structuredPlugin = KernelPluginFactory.CreateFromType<StructuredOutputPlugin>();
+                //grokKernel.Plugins.Add(structuredPlugin);
+                //chatGPTKernel.Plugins.Add(structuredPlugin);
+                //geminiKernel.Plugins.Add(structuredPlugin);
 
                 _kernels = new List<Kernel> { grokKernel, chatGPTKernel, geminiKernel };  // First = judge
             }

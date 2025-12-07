@@ -1,4 +1,6 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.AI; // For ChatResponseFormat
 
 namespace MultiAgentThinkGroup;
 
@@ -10,9 +12,9 @@ public record StructuredResponse(
 )
 {
     /// <summary>
-    /// JSON Schema for StructuredResponse, suitable for xAI structured outputs.
+    /// JSON Schema wrapper for xAI / Grok structured outputs.
     /// </summary>
-    public static object GetSchema() => new
+    public static object GetXaiSchema() => new
     {
         name = "structured_response",
         schema = new
@@ -47,10 +49,44 @@ public record StructuredResponse(
             },
             // reasoning and sources are optional; final_answer + confidence are required
             required = new[] { "final_answer", "confidence" },
+            // you *can* keep this for xAI; Gemini doesn't need to see it
             additionalProperties = false
         },
         strict = true
     };
+
+    // Core JSON Schema – plain object, no xAI wrapper, no $ref, only basic fields that Gemini supports.
+    // This is what we’ll give to Gemini *and* use for OpenAI’s structured output.
+    private const string CoreSchemaJson = """
+    {
+      "type": "object",
+      "properties": {
+        "reasoning": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "final_answer": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["final_answer", "confidence"]
+    }
+    """;
+
+    /// <summary>
+    /// Plain JSON schema as JsonElement, used *as-is* for Gemini and OpenAI.
+    /// </summary>
+    public static JsonElement GetCoreJsonSchemaElement()
+        => JsonDocument.Parse(CoreSchemaJson).RootElement.Clone();
 }
 
 public class StructuredResponseEventArgs : EventArgs
