@@ -105,13 +105,14 @@ public record StructuredResponse(
         if (Reasoning is { Count: > 0 })
         {
             sb.AppendLine("Reasoning:");
-            for (int i = 0; i < Reasoning.Count; i++)
-            {
-                sb.Append("  ");
-                sb.Append(i + 1);
-                sb.Append(". ");
-                sb.AppendLine(Reasoning[i]);
-            }
+            sb.Append(GetReasoningAsString());
+            //for (int i = 0; i < Reasoning.Count; i++)
+            //{
+            //    sb.Append("  ");
+            //    sb.Append(i + 1);
+            //    sb.Append(". ");
+            //    sb.AppendLine(Reasoning[i]);
+            //}
         }
 
         sb.AppendLine();
@@ -129,6 +130,23 @@ public record StructuredResponse(
             }
         }
 
+        return sb.ToString();
+    }
+
+    public string GetReasoningAsString()
+    {
+        if (Reasoning is null || Reasoning.Count == 0)
+        {
+            return string.Empty;
+        }
+        var sb = new StringBuilder();
+        for (int i = 0; i < Reasoning.Count; i++)
+        {
+            sb.Append("  ");
+            sb.Append(i + 1);
+            sb.Append(". ");
+            sb.AppendLine(Reasoning[i]);
+        }
         return sb.ToString();
     }
 }

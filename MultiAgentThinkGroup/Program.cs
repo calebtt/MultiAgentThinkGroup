@@ -79,13 +79,17 @@ class Program
         //await SingleStructuredTest(CreateGrokAgent(grokKernel), "Grok", query);
         //await SingleStructuredTest(CreateGeminiAgent(geminiKernel), "Gemini", query);
 
-        var grokResponse = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGrokAgent(grokKernel), Prompts.InitialStepPrompt, query);
-        var chatGptResponse = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.InitialStepPrompt, query);
-        var geminiResponse = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.InitialStepPrompt, query);
+        var grokResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGrokAgent(grokKernel), Prompts.ImprovedInitialStepPrompt, query);
+        var chatGptResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.ImprovedInitialStepPrompt, query);
+        var geminiResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.ImprovedInitialStepPrompt, query);
 
-        Log.Information("Response from Grok Agent: \n{content}", grokResponse.ToString());
-        Log.Information("Response from ChatGPT Agent: \n{content}", chatGptResponse.ToString());
-        Log.Information("Response from Gemini Agent: \n{content}", geminiResponse.ToString());
+        var grokResult = await grokResponse;
+        var chatGptResult =  await chatGptResponse;
+        var geminiResult = await geminiResponse;
+
+        Log.Information("Response from Grok Agent: \n{content}", grokResult.GetReasoningAsString());
+        Log.Information("Response from ChatGPT Agent: \n{content}", chatGptResult.GetReasoningAsString());
+        Log.Information("Response from Gemini Agent: \n{content}", geminiResult.GetReasoningAsString());
 
         //await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
 
@@ -124,10 +128,10 @@ class Program
     private static ChatCompletionAgent CreateGrokAgent(Kernel kernel) => new()
     {
         Kernel = kernel,
-        Instructions = "Answer the user.",
+        Instructions = Prompts.ImprovedInitialStepPrompt,
         Arguments = new(new GrokPromptExecutionSettings
         {
-            ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
+            //ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
             StructuredOutputMode = GrokStructuredOutputMode.JsonSchema,
             StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
             // Reasoning effort level only supported on old models from xAI,
@@ -139,7 +143,7 @@ class Program
     private static ChatCompletionAgent CreateGeminiAgent(Kernel kernel) => new()
     {
         Kernel = kernel,
-        Instructions = "Answer the user.",
+        Instructions = Prompts.ImprovedInitialStepPrompt,
         Arguments = new(new GeminiPromptExecutionSettings
         {
             //ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
@@ -155,7 +159,7 @@ class Program
     private static ChatCompletionAgent CreateChatGPTAgent(Kernel kernel) => new()
     {
         Kernel = kernel,
-        Instructions = "Answer the user.",
+        Instructions = Prompts.ImprovedInitialStepPrompt,
         Arguments = new(new OpenAIPromptExecutionSettings
         {
             //ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
