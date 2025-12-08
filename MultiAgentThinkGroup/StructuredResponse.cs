@@ -1,6 +1,7 @@
-﻿using System.Text.Json;
+﻿using Microsoft.Extensions.AI; // For ChatResponseFormat
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.AI; // For ChatResponseFormat
 
 namespace MultiAgentThinkGroup;
 
@@ -94,6 +95,42 @@ public record StructuredResponse(
             GetCoreJsonSchemaElement(),
             schemaName: "structured_response",
             schemaDescription: "Structured response with reasoning, final_answer, confidence, and optional sources.");
+
+    public override string ToString()
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine($"Confidence: {Confidence:0.00}");
+
+        if (Reasoning is { Count: > 0 })
+        {
+            sb.AppendLine("Reasoning:");
+            for (int i = 0; i < Reasoning.Count; i++)
+            {
+                sb.Append("  ");
+                sb.Append(i + 1);
+                sb.Append(". ");
+                sb.AppendLine(Reasoning[i]);
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Final answer:");
+        sb.AppendLine(FinalAnswer);
+
+        if (Sources is { Length: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("Sources:");
+            for (int i = 0; i < Sources.Length; i++)
+            {
+                sb.Append("  - ");
+                sb.AppendLine(Sources[i]);
+            }
+        }
+
+        return sb.ToString();
+    }
 }
 
 public class StructuredResponseEventArgs : EventArgs

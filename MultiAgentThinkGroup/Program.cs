@@ -9,8 +9,6 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Plugins.Web;
 using Microsoft.SemanticKernel.Plugins.Web.Google;
 using MultiAgentThinkGroup;
-
-
 //using OpenAI.Chat;
 using Serilog;
 using Serilog.Events;
@@ -20,6 +18,8 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+
+
 
 
 class Program
@@ -78,7 +78,16 @@ class Program
 
         //await SingleStructuredTest(CreateGrokAgent(grokKernel), "Grok", query);
         //await SingleStructuredTest(CreateGeminiAgent(geminiKernel), "Gemini", query);
-        await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
+
+        var grokResponse = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGrokAgent(grokKernel), Prompts.InitialStepPrompt, query);
+        var chatGptResponse = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.InitialStepPrompt, query);
+        var geminiResponse = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.InitialStepPrompt, query);
+
+        Log.Information("Response from Grok Agent: \n{content}", grokResponse.ToString());
+        Log.Information("Response from ChatGPT Agent: \n{content}", chatGptResponse.ToString());
+        Log.Information("Response from Gemini Agent: \n{content}", geminiResponse.ToString());
+
+        //await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
 
         //await SingleKernelTest(orchestrator, chatGPTKernel, "ChatGPT", query, 1);
         //await SingleKernelTest(orchestrator, geminiKernel, "Gemini", query, 2);
