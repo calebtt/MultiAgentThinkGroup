@@ -17,7 +17,7 @@ namespace MultiAgentWPF  // Update to your namespace
 {
     public partial class MainWindow : Window
     {
-        private MultiAgentThinkOrchestrator _orchestrator = new MultiAgentThinkOrchestrator();
+        //private MultiAgentThinkOrchestrator _orchestrator = new MultiAgentThinkOrchestrator();
         private List<Kernel> _kernels = new List<Kernel>();
         private ChatHistory _sharedHistory = new ChatHistory();
 

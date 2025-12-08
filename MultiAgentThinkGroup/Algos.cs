@@ -1,5 +1,9 @@
 ﻿using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.Google;
+using Microsoft.SemanticKernel.Connectors.Grok;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 using MultiAgentThinkGroup;
 using Serilog;
 using Serilog.Events;
@@ -11,6 +15,50 @@ using System.Text.Json;
 /// </summary>
 public static partial class Algos
 {
+    public static ChatCompletionAgent CreateGrokAgent(Kernel kernel, string instructions) => new()
+    {
+        Kernel = kernel,
+        Instructions = instructions,
+        Arguments = new(new GrokPromptExecutionSettings
+        {
+            ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
+            StructuredOutputMode = GrokStructuredOutputMode.JsonSchema,
+            StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
+            // Reasoning effort level only supported on old models from xAI,
+            // model choice denotes reasoning level.
+            MaxTokens = 7000
+        })
+    };
+
+    public static ChatCompletionAgent CreateGeminiAgent(Kernel kernel, string instructions) => new()
+    {
+        Kernel = kernel,
+        Instructions = instructions,
+        Arguments = new(new GeminiPromptExecutionSettings
+        {
+            ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
+            ResponseMimeType = "application/json",
+            // Let SK generate the JSON Schema for Gemini
+            ResponseSchema = typeof(StructuredResponse),
+            MaxTokens = 7000,
+            ThinkingConfig = new() { ThinkingLevel = "low" }
+        })
+    };
+
+    public static ChatCompletionAgent CreateChatGPTAgent(Kernel kernel, string instructions) => new()
+    {
+        Kernel = kernel,
+        Instructions = instructions,
+        Arguments = new(new OpenAIPromptExecutionSettings
+        {
+            ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
+            // Let SK generate JSON Schema for StructuredResponse
+            ResponseFormat = typeof(StructuredResponse),
+            MaxTokens = 7000,
+            ReasoningEffort = "low"
+        })
+    };
+
     public static void AddConsoleLogger(string? logName)
     {
         var serilogLogger = new LoggerConfiguration()
@@ -33,16 +81,6 @@ public static partial class Algos
         Log.Logger = serilogLogger;
         Log.Information("Serilog configured.");
     }
-
-    //public static Kernel BuildKernel(string apiKey, string modelName, string endPoint)
-    //{
-    //    var builder = Kernel.CreateBuilder();
-    //    builder.AddOpenAIChatCompletion(
-    //        modelId: modelName,
-    //        apiKey: apiKey,
-    //        endpoint: new Uri(endPoint));
-    //    return builder.Build();
-    //}
 
     public const int MaxFileChars = 8000; // tune for token limits
     public static ChatHistory BuildHistoryWithFiles(

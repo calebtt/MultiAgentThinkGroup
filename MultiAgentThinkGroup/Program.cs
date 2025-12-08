@@ -9,6 +9,8 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Plugins.Web;
 using Microsoft.SemanticKernel.Plugins.Web.Google;
 using MultiAgentThinkGroup;
+using MultiAgentThinkGroup.Analysis;
+
 //using OpenAI.Chat;
 using Serilog;
 using Serilog.Events;
@@ -18,9 +20,6 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-
-
-
 
 class Program
 {
@@ -40,8 +39,6 @@ class Program
     {
 
         Algos.AddConsoleLogger("MultiAgentThinkGroupLog.txt");
-
-        var orchestrator = new MultiAgentThinkOrchestrator();
 
         var grokBuilder = Kernel.CreateBuilder().AddGrokChatCompletion(grokModel, grokKey);
         var chatGPTBuilder = Kernel.CreateBuilder().AddOpenAIChatCompletion(openAIModel, openAIKey);
@@ -64,59 +61,38 @@ class Program
         //chatGPTKernel.Plugins.Add(structuredPlugin);
         //geminiKernel.Plugins.Add(structuredPlugin);
 
-        var kernels = new List<Kernel> { grokKernel, chatGPTKernel, geminiKernel };  // First = judge
-
         var query = "How can I build my own motorcycle?";
 
-        //await RunOrchestration(orchestrator, kernels, query);
+        // Initial reasoning phase (structured outputs)
+        var grokInitial = await MultiAgentThinkOrchestrator
+            .InvokeForStructuredResponseAsync(Algos.CreateGrokAgent(grokKernel, Prompts.InitialStepPrompt), Prompts.InitialStepPrompt, query);
+        var chatGptInitial = await MultiAgentThinkOrchestrator
+            .InvokeForStructuredResponseAsync(Algos.CreateChatGPTAgent(chatGPTKernel, Prompts.InitialStepPrompt), Prompts.InitialStepPrompt, query);
+        var geminiInitial = await MultiAgentThinkOrchestrator
+            .InvokeForStructuredResponseAsync(Algos.CreateGeminiAgent(geminiKernel, Prompts.InitialStepPrompt), Prompts.InitialStepPrompt, query);
 
-        //var chatOpts = (0.7f, 400, MultiAgentThinkInstructions.UniversalPrompt);
-        //var chat = new LlmChat(chatOpts, outputPlugin, chatGPTKernel);
-        //var response = await chat.ProcessUserQueryAsync(query);
-
-        //Log.Information("Response from LlmChat:\n\n{content}", response);
-
-        //await SingleStructuredTest(CreateGrokAgent(grokKernel), "Grok", query);
-        //await SingleStructuredTest(CreateGeminiAgent(geminiKernel), "Gemini", query);
-
-        var grokResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGrokAgent(grokKernel), Prompts.InitialStepPrompt, query);
-        var chatGptResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.InitialStepPrompt, query);
-        var geminiResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.InitialStepPrompt, query);
-
-        try
+        // 1. Build the panel agents (for the discussion phase)
+        //    These stay kernel-based because the panel conversation is plain text.
+        var panelAgents = new List<PanelAgentDescriptor>
         {
-            var grokResult = await grokResponse;
-            Log.Information("Response from Grok Agent: \n{content}", grokResult.GetReasoningAsString());
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error invoking Grok Agent");
-        }
-        try
-        {
-            var chatGptResult = await chatGptResponse;
-            Log.Information("Response from ChatGPT Agent: \n{content}", chatGptResult.GetReasoningAsString());
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error invoking ChatGPT Agent");
-        }
-        try
-        {
-            var geminiResult = await geminiResponse;
-            Log.Information("Response from Gemini Agent: \n{content}", geminiResult.GetReasoningAsString());
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error invoking Gemini Agent");
-        }
+            new("Grok",    grokKernel),
+            new("ChatGPT", chatGPTKernel),
+            new("Gemini",  geminiKernel)
+        };
 
-        //await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
+        var judge = new SingleJudgeCrossAnalyzer(Algos.CreateGrokAgent(grokKernel, Prompts.InitialStepPrompt));
+        var orchestrator = new MultiAgentDialogueOrchestrator(panelAgents, judge);
 
-        //await SingleKernelTest(orchestrator, chatGPTKernel, "ChatGPT", query, 1);
-        //await SingleKernelTest(orchestrator, geminiKernel, "Gemini", query, 2);
+        var initial = new Dictionary<string, StructuredResponse>
+        {
+            ["Grok"] = grokInitial,
+            ["ChatGPT"] = chatGptInitial,
+            ["Gemini"] = geminiInitial
+        };
+        // Multi-agent dialogue + single judge merge
+        var (transcript, mergedAfterDialogue) = await orchestrator.RunAsync(query, initial, rounds: 2);
 
-        //Log.Information("FINAL CONSOLIDATED ANSWER:\n\n{content}", finalAnswer);
+        Log.Information("Final Merged Response after Dialogue:\n{response}", mergedAfterDialogue);
     }
 
     private static void AddGoogleSearchPlugin(Kernel geminiKernel, Kernel grokKernel, Kernel chatGPTKernel)
@@ -127,68 +103,24 @@ class Program
         geminiKernel.Plugins.AddFromObject(google, "google");
     }
 
-    private static async Task RunOrchestration(MultiAgentThinkOrchestrator orchestrator, List<Kernel> kernels, string query)
-    {
-        // Use RunWithLiveUIAsync with console logging callback
-        //await orchestrator.RunWithLiveUIAsync(query, kernels, update =>
-        //{
-        //    // Print progress to console
-        //    Log.Information("--- Live Update ---");
-        //    Log.Information($"Grok: Thought = {update.Grok.Thought}, Action = {update.Grok.Action}, Observation = {update.Grok.Observation}");
-        //    Log.Information($"GPT: Thought = {update.Gpt.Thought}, Action = {update.Gpt.Action}, Observation = {update.Gpt.Observation}");
-        //    Log.Information($"Gemini: Thought = {update.Gemini.Thought}, Action = {update.Gemini.Action}, Observation = {update.Gemini.Observation}");
-        //    if (update.Final != null)
-        //    {
-        //        Log.Information($"Final: {update.Final.FinalAnswer} (Confidence: {update.Final.Confidence})");
-        //    }
-        //    Log.Information("-------------------");
-        //});
-    }
+    //private static async Task RunOrchestration(MultiAgentThinkOrchestrator orchestrator, List<Kernel> kernels, string query)
+    //{
+    //    // Use RunWithLiveUIAsync with console logging callback
+    //    //await orchestrator.RunWithLiveUIAsync(query, kernels, update =>
+    //    //{
+    //    //    // Print progress to console
+    //    //    Log.Information("--- Live Update ---");
+    //    //    Log.Information($"Grok: Thought = {update.Grok.Thought}, Action = {update.Grok.Action}, Observation = {update.Grok.Observation}");
+    //    //    Log.Information($"GPT: Thought = {update.Gpt.Thought}, Action = {update.Gpt.Action}, Observation = {update.Gpt.Observation}");
+    //    //    Log.Information($"Gemini: Thought = {update.Gemini.Thought}, Action = {update.Gemini.Action}, Observation = {update.Gemini.Observation}");
+    //    //    if (update.Final != null)
+    //    //    {
+    //    //        Log.Information($"Final: {update.Final.FinalAnswer} (Confidence: {update.Final.Confidence})");
+    //    //    }
+    //    //    Log.Information("-------------------");
+    //    //});
+    //}
 
-    private static ChatCompletionAgent CreateGrokAgent(Kernel kernel) => new()
-    {
-        Kernel = kernel,
-        Instructions = Prompts.InitialStepPrompt,
-        Arguments = new(new GrokPromptExecutionSettings
-        {
-            //ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
-            StructuredOutputMode = GrokStructuredOutputMode.JsonSchema,
-            StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
-            // Reasoning effort level only supported on old models from xAI,
-            // model choice denotes reasoning level.
-            MaxTokens = 7000
-        })
-    };
-
-    private static ChatCompletionAgent CreateGeminiAgent(Kernel kernel) => new()
-    {
-        Kernel = kernel,
-        Instructions = Prompts.InitialStepPrompt,
-        Arguments = new(new GeminiPromptExecutionSettings
-        {
-            //ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
-            ResponseMimeType = "application/json",
-            // Let SK generate the JSON Schema for Gemini
-            ResponseSchema = typeof(StructuredResponse),
-            MaxTokens = 7000,
-            ThinkingConfig = new() { ThinkingLevel = "low" }
-        })
-    };
-
-
-    private static ChatCompletionAgent CreateChatGPTAgent(Kernel kernel) => new()
-    {
-        Kernel = kernel,
-        Instructions = Prompts.InitialStepPrompt,
-        Arguments = new(new OpenAIPromptExecutionSettings
-        {
-            //ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
-            // Let SK generate JSON Schema for StructuredResponse
-            ResponseFormat = typeof(StructuredResponse),
-            MaxTokens = 7000,
-            ReasoningEffort = "low"
-        })
-    };
 
     public static async Task SingleStructuredTest(ChatCompletionAgent agent, string name, string query)
     {

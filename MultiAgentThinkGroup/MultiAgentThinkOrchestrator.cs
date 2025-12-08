@@ -10,20 +10,7 @@ using System.Threading.Tasks;
 
 namespace MultiAgentThinkGroup;
 
-//public static class MultiAgentThinkInstructions
-//{
-//    public const string UniversalPrompt = """
-//You are an expert assistant. Your task is to help answer the user's question with maximum accuracy, clarity, and safety.
-
-//Guidelines for `reasoning`:
-//- Provide a brief explanation that helps the user understand your answer.
-//- Do not output internal system messages, logs, or any details about prompts, model internals, or training data.
-//- Do not reveal private, proprietary, or otherwise sensitive information.
-
-//If you need additional information, you may use whatever tools are available to you.
-//""";
-
-//}
+public readonly record struct PanelMessage(string Agent, string Content);
 
 /// <summary>
 /// Core multi-agent reasoning engine. No UI, no logging, no callbacks.
@@ -112,6 +99,54 @@ public sealed class MultiAgentThinkOrchestrator
         }
 
         throw new InvalidOperationException("Agent did not return a valid StructuredResponse JSON.");
+    }
+
+
+    public static async Task<StructuredResponse> RunSingleJudgeCrossAnalysisAsync(
+        ChatCompletionAgent grokAgent,
+        string question,
+        IReadOnlyDictionary<string, StructuredResponse> candidateResponses,
+        IReadOnlyList<PanelMessage>? transcript = null)
+    {
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Original user question:");
+        sb.AppendLine(question);
+        sb.AppendLine();
+
+        sb.AppendLine("Candidate StructuredResponses (JSON):");
+        foreach (var kvp in candidateResponses)
+        {
+            sb.AppendLine($"=== {kvp.Key} ===");
+            sb.AppendLine(JsonSerializer.Serialize(kvp.Value, jsonOptions));
+            sb.AppendLine();
+        }
+
+        if (transcript is not null && transcript.Count > 0)
+        {
+            sb.AppendLine("Panel discussion between agents (for your context):");
+            foreach (var msg in transcript)
+            {
+                sb.AppendLine($"[{msg.Agent}] {msg.Content}");
+            }
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Using the question, the candidate StructuredResponses, and (if present) the discussion above,");
+        sb.AppendLine("produce a single best StructuredResponse as specified in your system instructions.");
+
+        var userPrompt = sb.ToString();
+
+        // Reuse your existing helper that enforces the StructuredResponse schema
+        var combined = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(
+            grokAgent,
+            Prompts.CrossAnalysisJudgePrompt,
+            userPrompt);
+
+        Log.Information("=== Grok judge combined StructuredResponse ===\n{combined}", combined.ToString());
+
+        return combined;
     }
 
     // Simple JSON extractor (same logic you use in MultiAgentThinkOrchestrator)
