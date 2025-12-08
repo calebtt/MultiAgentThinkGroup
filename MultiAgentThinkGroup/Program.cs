@@ -83,13 +83,33 @@ class Program
         var chatGptResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.InitialStepPrompt, query);
         var geminiResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.InitialStepPrompt, query);
 
-        var grokResult = await grokResponse;
-        var chatGptResult =  await chatGptResponse;
-        var geminiResult = await geminiResponse;
-
-        Log.Information("Response from Grok Agent: \n{content}", grokResult.GetReasoningAsString());
-        Log.Information("Response from ChatGPT Agent: \n{content}", chatGptResult.GetReasoningAsString());
-        Log.Information("Response from Gemini Agent: \n{content}", geminiResult.GetReasoningAsString());
+        try
+        {
+            var grokResult = await grokResponse;
+            Log.Information("Response from Grok Agent: \n{content}", grokResult.GetReasoningAsString());
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error invoking Grok Agent");
+        }
+        try
+        {
+            var chatGptResult = await chatGptResponse;
+            Log.Information("Response from ChatGPT Agent: \n{content}", chatGptResult.GetReasoningAsString());
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error invoking ChatGPT Agent");
+        }
+        try
+        {
+            var geminiResult = await geminiResponse;
+            Log.Information("Response from Gemini Agent: \n{content}", geminiResult.GetReasoningAsString());
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error invoking Gemini Agent");
+        }
 
         //await SingleStructuredTest(CreateChatGPTAgent(chatGPTKernel), "ChatGPT", query);
 
@@ -136,7 +156,7 @@ class Program
             StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
             // Reasoning effort level only supported on old models from xAI,
             // model choice denotes reasoning level.
-            MaxTokens = 5000
+            MaxTokens = 7000
         })
     };
 
@@ -150,7 +170,7 @@ class Program
             ResponseMimeType = "application/json",
             // Let SK generate the JSON Schema for Gemini
             ResponseSchema = typeof(StructuredResponse),
-            MaxTokens = 5000,
+            MaxTokens = 7000,
             ThinkingConfig = new() { ThinkingLevel = "low" }
         })
     };
@@ -165,7 +185,7 @@ class Program
             //ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
             // Let SK generate JSON Schema for StructuredResponse
             ResponseFormat = typeof(StructuredResponse),
-            MaxTokens = 5000,
+            MaxTokens = 7000,
             ReasoningEffort = "low"
         })
     };
