@@ -79,9 +79,9 @@ class Program
         //await SingleStructuredTest(CreateGrokAgent(grokKernel), "Grok", query);
         //await SingleStructuredTest(CreateGeminiAgent(geminiKernel), "Gemini", query);
 
-        var grokResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGrokAgent(grokKernel), Prompts.ImprovedInitialStepPrompt, query);
-        var chatGptResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.ImprovedInitialStepPrompt, query);
-        var geminiResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.ImprovedInitialStepPrompt, query);
+        var grokResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGrokAgent(grokKernel), Prompts.InitialStepPrompt, query);
+        var chatGptResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateChatGPTAgent(chatGPTKernel), Prompts.InitialStepPrompt, query);
+        var geminiResponse = MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(CreateGeminiAgent(geminiKernel), Prompts.InitialStepPrompt, query);
 
         var grokResult = await grokResponse;
         var chatGptResult =  await chatGptResponse;
@@ -128,7 +128,7 @@ class Program
     private static ChatCompletionAgent CreateGrokAgent(Kernel kernel) => new()
     {
         Kernel = kernel,
-        Instructions = Prompts.ImprovedInitialStepPrompt,
+        Instructions = Prompts.InitialStepPrompt,
         Arguments = new(new GrokPromptExecutionSettings
         {
             //ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
@@ -143,7 +143,7 @@ class Program
     private static ChatCompletionAgent CreateGeminiAgent(Kernel kernel) => new()
     {
         Kernel = kernel,
-        Instructions = Prompts.ImprovedInitialStepPrompt,
+        Instructions = Prompts.InitialStepPrompt,
         Arguments = new(new GeminiPromptExecutionSettings
         {
             //ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
@@ -159,7 +159,7 @@ class Program
     private static ChatCompletionAgent CreateChatGPTAgent(Kernel kernel) => new()
     {
         Kernel = kernel,
-        Instructions = Prompts.ImprovedInitialStepPrompt,
+        Instructions = Prompts.InitialStepPrompt,
         Arguments = new(new OpenAIPromptExecutionSettings
         {
             //ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
