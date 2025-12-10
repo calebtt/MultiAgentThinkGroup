@@ -5,11 +5,11 @@ using System.Text.Json;
 namespace MultiAgentThinkGroup;
 
 /// <summary>
-/// Multi-agent conversation (simulated thought) *without* a final judge.
+/// Multi-agent conversation (for the simulated thought, non-real CoT) *without* a final judge.
 /// Requires initial StructuredResponse objects per agent and runs N rounds of discussion.
 /// Produces a transcript only.
 /// </summary>
-public sealed class MultiAgentConversationSimulatedThoughtOnly
+public sealed class AgentConvoClient
 {
     private readonly IReadOnlyList<PanelAgentDescriptor> _agents;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -19,7 +19,7 @@ public sealed class MultiAgentConversationSimulatedThoughtOnly
     /// </summary>
     public Func<string, int, string, Task>? TurnLogger { get; set; }
 
-    public MultiAgentConversationSimulatedThoughtOnly(IReadOnlyList<PanelAgentDescriptor> agents)
+    public AgentConvoClient(IReadOnlyList<PanelAgentDescriptor> agents)
     {
         _agents = agents ?? throw new ArgumentNullException(nameof(agents));
         _jsonOptions = new JsonSerializerOptions { WriteIndented = true };

@@ -10,12 +10,12 @@ namespace MultiAgentThinkGroup;
 /// Given a question + candidate StructuredResponses (+ optional transcript),
 /// use a single judge agent to produce one merged StructuredResponse.
 /// </summary>
-public sealed class SingleJudgeCrossAnalyzer
+public sealed class ZeroShotSingleJudge
 {
     private readonly ChatCompletionAgent _judgeAgent;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public SingleJudgeCrossAnalyzer(ChatCompletionAgent judgeAgent)
+    public ZeroShotSingleJudge(ChatCompletionAgent judgeAgent)
     {
         _judgeAgent = judgeAgent ?? throw new ArgumentNullException(nameof(judgeAgent));
         _jsonOptions = new JsonSerializerOptions { WriteIndented = true };

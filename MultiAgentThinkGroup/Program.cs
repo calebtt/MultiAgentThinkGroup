@@ -58,8 +58,8 @@ class Program
             new("Gemini",  geminiKernel)
         };
 
-        var judge = new SingleJudgeCrossAnalyzer(Algos.CreateGrokJudgeAgent(grokKernel));
-        var orchestrator = new SingleJudgeDialogueMerger(panelAgents, judge);
+        var judge = new ZeroShotSingleJudge(Algos.CreateGrokJudgeAgent(grokKernel));
+        var orchestrator = new DialogueMergeSingleJudge(panelAgents, judge);
         orchestrator.TurnOccurred += async (agentName, round, content) =>
         {
             Log.Information("Agent: {agent} | Round: {round}\n{content}\n", agentName, round, content);

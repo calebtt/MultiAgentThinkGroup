@@ -1,15 +1,14 @@
-﻿// SingleJudgeDialogueMerger.cs
-namespace MultiAgentThinkGroup;
+﻿namespace MultiAgentThinkGroup;
 
 /// <summary>
 /// Multi-agent conversation (simulated thought) followed by a single judge merge.
 /// - Requires initial StructuredResponse objects per agent.
 /// - Runs N rounds of discussion, then uses a judge to merge.
 /// </summary>
-public sealed class SingleJudgeDialogueMerger
+public sealed class DialogueMergeSingleJudge
 {
-    private readonly SingleJudgeCrossAnalyzer _judge;
-    private readonly MultiAgentConversationSimulatedThoughtOnly _conversationalist;
+    private readonly ZeroShotSingleJudge _judge;
+    private readonly AgentConvoClient _conversationalist;
 
     /// <summary>
     /// Raised after each panel turn: (agent name, round, content).
@@ -21,12 +20,12 @@ public sealed class SingleJudgeDialogueMerger
     /// </summary>
     public event EventHandler<StructuredResponseEventArgs>? JudgeCompleted;
 
-    public SingleJudgeDialogueMerger(
+    public DialogueMergeSingleJudge(
         IReadOnlyList<PanelAgentDescriptor> agents,
-        SingleJudgeCrossAnalyzer judge)
+        ZeroShotSingleJudge judge)
     {
         _judge = judge ?? throw new ArgumentNullException(nameof(judge));
-        _conversationalist = new MultiAgentConversationSimulatedThoughtOnly(agents)
+        _conversationalist = new AgentConvoClient(agents)
         {
             // Bridge TurnOccurred into the inner conversation engine
             TurnLogger = async (name, round, content) =>
