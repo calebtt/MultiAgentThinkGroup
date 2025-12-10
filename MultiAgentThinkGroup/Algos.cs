@@ -8,13 +8,15 @@ using MultiAgentThinkGroup;
 using Serilog;
 using Serilog.Events;
 using System.Text;
-using System.Text.Json;
 
 /// <summary>
 /// A place to put free functions.
 /// </summary>
 public static partial class Algos
 {
+    public const int MaxTokens = 7000;
+    public const int MaxFileChars = 8000; // tune for token limits
+
     public static ChatCompletionAgent CreateGrokAgent(Kernel kernel, string instructions) => new()
     {
         Kernel = kernel,
@@ -26,7 +28,20 @@ public static partial class Algos
             StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
             // Reasoning effort level only supported on old models from xAI,
             // model choice denotes reasoning level.
-            MaxTokens = 7000
+            MaxTokens = MaxTokens
+        })
+    };
+
+    public static ChatCompletionAgent CreateGrokJudgeAgent(Kernel kernel) => new()
+    {
+        Kernel = kernel,
+        Instructions = Prompts.CrossAnalysisJudgePrompt,
+        Arguments = new(new GrokPromptExecutionSettings
+        {
+            ToolCallBehavior = GrokToolCallBehavior.AutoInvokeKernelFunctions,
+            StructuredOutputMode = GrokStructuredOutputMode.JsonSchema,
+            StructuredOutputSchema = StructuredResponse.GetXaiSchema(),
+            MaxTokens = MaxTokens
         })
     };
 
@@ -40,7 +55,7 @@ public static partial class Algos
             ResponseMimeType = "application/json",
             // Let SK generate the JSON Schema for Gemini
             ResponseSchema = typeof(StructuredResponse),
-            MaxTokens = 7000,
+            MaxTokens = MaxTokens,
             ThinkingConfig = new() { ThinkingLevel = "low" }
         })
     };
@@ -54,7 +69,7 @@ public static partial class Algos
             ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions,
             // Let SK generate JSON Schema for StructuredResponse
             ResponseFormat = typeof(StructuredResponse),
-            MaxTokens = 7000,
+            MaxTokens = MaxTokens,
             ReasoningEffort = "low"
         })
     };
@@ -82,7 +97,6 @@ public static partial class Algos
         Log.Information("Serilog configured.");
     }
 
-    public const int MaxFileChars = 8000; // tune for token limits
     public static ChatHistory BuildHistoryWithFiles(
         string question,
         IEnumerable<string> filePaths)
@@ -119,5 +133,23 @@ public static partial class Algos
         }
 
         return history;
+    }
+
+    public static string ExtractText(IReadOnlyList<ChatMessageContent> messages)
+    {
+        var reply = messages.LastOrDefault();
+        if (reply is null) return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(reply.Content))
+        {
+            return reply.Content;
+        }
+
+        var parts = reply.Items
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t));
+
+        return string.Join(" ", parts);
     }
 }

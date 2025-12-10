@@ -1,35 +1,37 @@
-﻿// MultiAgentDialogueOrchestrator.cs
+﻿using Microsoft.SemanticKernel.ChatCompletion;
 using System.Text;
 using System.Text.Json;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
-using Serilog;
 
-namespace MultiAgentThinkGroup.Analysis;
+namespace MultiAgentThinkGroup;
 
-public sealed class MultiAgentDialogueOrchestrator
+/// <summary>
+/// Multi-agent conversation (simulated thought) *without* a final judge.
+/// Requires initial StructuredResponse objects per agent and runs N rounds of discussion.
+/// Produces a transcript only.
+/// </summary>
+public sealed class MultiAgentConversationSimulatedThoughtOnly
 {
     private readonly IReadOnlyList<PanelAgentDescriptor> _agents;
-    private readonly SingleJudgeCrossAnalyzer _judge;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    public MultiAgentDialogueOrchestrator(
-        IReadOnlyList<PanelAgentDescriptor> agents,
-        SingleJudgeCrossAnalyzer judge)
+    /// <summary>
+    /// AgentName, Round, Content
+    /// </summary>
+    public Func<string, int, string, Task>? TurnLogger { get; set; }
+
+    public MultiAgentConversationSimulatedThoughtOnly(IReadOnlyList<PanelAgentDescriptor> agents)
     {
         _agents = agents ?? throw new ArgumentNullException(nameof(agents));
-        _judge = judge ?? throw new ArgumentNullException(nameof(judge));
         _jsonOptions = new JsonSerializerOptions { WriteIndented = true };
     }
 
     /// <summary>
-    /// Main entry point: run multi-agent dialogue for N rounds, then ask Grok to merge.
+    /// Run multi-agent dialogue for N rounds and return the transcript.
     /// </summary>
-    public async Task<(List<PanelMessage> Transcript, StructuredResponse Combined)>
-        RunAsync(
-            string question,
-            IReadOnlyDictionary<string, StructuredResponse> initialResponses,
-            int rounds)
+    public async Task<List<PanelMessage>> RunAsync(
+        string question,
+        IReadOnlyDictionary<string, StructuredResponse> initialResponses,
+        int rounds)
     {
         var transcript = new List<PanelMessage>();
 
@@ -42,13 +44,9 @@ public sealed class MultiAgentDialogueOrchestrator
             }
         }
 
-        var combined = await _judge.JudgeAsync(question, initialResponses, transcript);
-        return (transcript, combined);
+        return transcript;
     }
 
-    /// <summary>
-    /// Single-responsibility: run one agent's turn and return its message.
-    /// </summary>
     private async Task<PanelMessage> RunSingleTurnAsync(
         PanelAgentDescriptor agent,
         string question,
@@ -66,16 +64,16 @@ public sealed class MultiAgentDialogueOrchestrator
         history.AddUserMessage(userPrompt);
 
         var messages = await chatService.GetChatMessageContentsAsync(history);
-        var replyText = ExtractText(messages);
+        var replyText = Algos.ExtractText(messages);
 
-        LogTurn(agent.Name, round, replyText);
+        if (TurnLogger is not null)
+        {
+            await TurnLogger(agent.Name, round, replyText);
+        }
 
         return new PanelMessage(agent.Name, replyText);
     }
 
-    /// <summary>
-    /// Single-responsibility: system prompt for a given panelist.
-    /// </summary>
     private string BuildSystemPromptForAgent(
         PanelAgentDescriptor agent,
         IReadOnlyList<PanelAgentDescriptor> allAgents)
@@ -90,9 +88,6 @@ public sealed class MultiAgentDialogueOrchestrator
             .Replace("{OTHER_AGENTS}", string.Join(", ", otherNames));
     }
 
-    /// <summary>
-    /// Single-responsibility: user prompt with question, own SR, others' SR, and transcript.
-    /// </summary>
     private string BuildUserPromptForAgent(
         PanelAgentDescriptor agent,
         string question,
@@ -143,37 +138,4 @@ public sealed class MultiAgentDialogueOrchestrator
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Single-responsibility: extract plain text from chat completion result.
-    /// </summary>
-    private static string ExtractText(IReadOnlyList<ChatMessageContent> messages)
-    {
-        var reply = messages.LastOrDefault();
-        if (reply is null) return string.Empty;
-
-        if (!string.IsNullOrWhiteSpace(reply.Content))
-        {
-            return reply.Content;
-        }
-
-        var parts = reply.Items
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t));
-
-        return string.Join(" ", parts);
-    }
-
-    /// <summary>
-    /// Single-responsibility: logging for one turn.
-    /// </summary>
-    private static void LogTurn(string agentName, int round, string content)
-    {
-        Log.Information("[Round {round}] {agent}:\n{content}", round, agentName, content);
-    }
 }
-
-/// <summary>
-/// Descriptor for a panel agent: a name + a Kernel (from which we'll get IChatCompletionService).
-/// </summary>
-public sealed record PanelAgentDescriptor(string Name, Kernel Kernel);

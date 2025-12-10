@@ -1,25 +1,13 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
+﻿using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
-using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.Google;
 using Microsoft.SemanticKernel.Connectors.Grok;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Plugins.Web;
 using Microsoft.SemanticKernel.Plugins.Web.Google;
 using MultiAgentThinkGroup;
-using MultiAgentThinkGroup.Analysis;
-
-//using OpenAI.Chat;
 using Serilog;
-using Serilog.Events;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 
 class Program
 {
@@ -51,25 +39,15 @@ class Program
         // Create a web search engine plugin, add to kernels.
         //AddGoogleSearchPlugin(geminiKernel, grokKernel, chatGPTKernel);
 
-        // Also add structured output plugin
-        //var outputPlugin = Algos.GetOutputPlugin();
-
-        //var structuredPlugin = KernelPluginFactory.CreateFromObject(outputPlugin, "structured_output");
-        //Log.Information("{number} functions in structured output plugin.", structuredPlugin.FunctionCount);
-
-        //grokKernel.Plugins.Add(structuredPlugin);
-        //chatGPTKernel.Plugins.Add(structuredPlugin);
-        //geminiKernel.Plugins.Add(structuredPlugin);
-
         var query = "How can I build my own motorcycle?";
 
         // Initial reasoning phase (structured outputs)
         var grokInitial = await MultiAgentThinkOrchestrator
-            .InvokeForStructuredResponseAsync(Algos.CreateGrokAgent(grokKernel, Prompts.InitialStepPrompt), Prompts.InitialStepPrompt, query);
+            .InvokeForStructuredResponseAsync(Algos.CreateGrokAgent(grokKernel, Prompts.InitialStepPrompt), query);
         var chatGptInitial = await MultiAgentThinkOrchestrator
-            .InvokeForStructuredResponseAsync(Algos.CreateChatGPTAgent(chatGPTKernel, Prompts.InitialStepPrompt), Prompts.InitialStepPrompt, query);
+            .InvokeForStructuredResponseAsync(Algos.CreateChatGPTAgent(chatGPTKernel, Prompts.InitialStepPrompt), query);
         var geminiInitial = await MultiAgentThinkOrchestrator
-            .InvokeForStructuredResponseAsync(Algos.CreateGeminiAgent(geminiKernel, Prompts.InitialStepPrompt), Prompts.InitialStepPrompt, query);
+            .InvokeForStructuredResponseAsync(Algos.CreateGeminiAgent(geminiKernel, Prompts.InitialStepPrompt), query);
 
         // 1. Build the panel agents (for the discussion phase)
         //    These stay kernel-based because the panel conversation is plain text.
@@ -80,8 +58,13 @@ class Program
             new("Gemini",  geminiKernel)
         };
 
-        var judge = new SingleJudgeCrossAnalyzer(Algos.CreateGrokAgent(grokKernel, Prompts.InitialStepPrompt));
-        var orchestrator = new MultiAgentDialogueOrchestrator(panelAgents, judge);
+        var judge = new SingleJudgeCrossAnalyzer(Algos.CreateGrokJudgeAgent(grokKernel));
+        var orchestrator = new SingleJudgeDialogueMerger(panelAgents, judge);
+        orchestrator.TurnOccurred += async (agentName, round, content) =>
+        {
+            Log.Information("Agent: {agent} | Round: {round}\n{content}\n", agentName, round, content);
+            await Task.CompletedTask;
+        };
 
         var initial = new Dictionary<string, StructuredResponse>
         {
@@ -102,25 +85,6 @@ class Program
         chatGPTKernel.Plugins.AddFromObject(google, "google");
         geminiKernel.Plugins.AddFromObject(google, "google");
     }
-
-    //private static async Task RunOrchestration(MultiAgentThinkOrchestrator orchestrator, List<Kernel> kernels, string query)
-    //{
-    //    // Use RunWithLiveUIAsync with console logging callback
-    //    //await orchestrator.RunWithLiveUIAsync(query, kernels, update =>
-    //    //{
-    //    //    // Print progress to console
-    //    //    Log.Information("--- Live Update ---");
-    //    //    Log.Information($"Grok: Thought = {update.Grok.Thought}, Action = {update.Grok.Action}, Observation = {update.Grok.Observation}");
-    //    //    Log.Information($"GPT: Thought = {update.Gpt.Thought}, Action = {update.Gpt.Action}, Observation = {update.Gpt.Observation}");
-    //    //    Log.Information($"Gemini: Thought = {update.Gemini.Thought}, Action = {update.Gemini.Action}, Observation = {update.Gemini.Observation}");
-    //    //    if (update.Final != null)
-    //    //    {
-    //    //        Log.Information($"Final: {update.Final.FinalAnswer} (Confidence: {update.Final.Confidence})");
-    //    //    }
-    //    //    Log.Information("-------------------");
-    //    //});
-    //}
-
 
     public static async Task SingleStructuredTest(ChatCompletionAgent agent, string name, string query)
     {

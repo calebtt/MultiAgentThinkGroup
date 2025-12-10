@@ -1,13 +1,7 @@
 ﻿using System.Text.RegularExpressions;
 
-namespace MultiAgentThinkGroup.Analysis;
+namespace MultiAgentThinkGroup;
 
-public readonly record struct ParsedReasoningStep(string Tag, string Text);
-
-public sealed record ReasoningStats(
-    int TotalSteps,
-    IReadOnlyDictionary<string, int> TagCounts
-);
 
 public sealed class ReasoningAnalysis
 {

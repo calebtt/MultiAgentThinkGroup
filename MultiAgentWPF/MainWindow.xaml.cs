@@ -5,13 +5,9 @@ using Microsoft.SemanticKernel.Connectors.Grok;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Microsoft.SemanticKernel.Plugins.Web;
 using Microsoft.SemanticKernel.Plugins.Web.Google;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+using MultiAgentThinkGroup;
 using System.Windows;
 using System.Windows.Threading;
-using MultiAgentThinkGroup;
 
 namespace MultiAgentWPF  // Update to your namespace
 {

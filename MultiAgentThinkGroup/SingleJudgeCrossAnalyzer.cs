@@ -1,13 +1,9 @@
-﻿// SingleJudgeCrossAnalyzer.cs
-using Microsoft.SemanticKernel.Agents;
-using Microsoft.SemanticKernel.Agents.Chat;
+﻿using Microsoft.SemanticKernel.Agents;
 using Serilog;
 using System.Text;
 using System.Text.Json;
 
-namespace MultiAgentThinkGroup.Analysis;
-
-public readonly record struct PanelMessage(string Agent, string Content);
+namespace MultiAgentThinkGroup;
 
 /// <summary>
 /// Single-responsibility:
@@ -33,18 +29,17 @@ public sealed class SingleJudgeCrossAnalyzer
         IReadOnlyDictionary<string, StructuredResponse> candidates,
         IReadOnlyList<PanelMessage>? transcript = null)
     {
-        var systemPrompt = Prompts.CrossAnalysisJudgePrompt;
         var userPrompt = BuildUserPrompt(question, candidates, transcript);
 
         var combined = await MultiAgentThinkOrchestrator.InvokeForStructuredResponseAsync(
             _judgeAgent,
-            systemPrompt,
             userPrompt);
 
         LogCombined(combined);
 
         return combined;
     }
+
 
     /// <summary>
     /// Build user prompt text summarizing question, candidates, and transcript.

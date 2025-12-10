@@ -106,13 +106,6 @@ public record StructuredResponse(
         {
             sb.AppendLine("Reasoning:");
             sb.Append(GetReasoningAsString());
-            //for (int i = 0; i < Reasoning.Count; i++)
-            //{
-            //    sb.Append("  ");
-            //    sb.Append(i + 1);
-            //    sb.Append(". ");
-            //    sb.AppendLine(Reasoning[i]);
-            //}
         }
 
         sb.AppendLine();
