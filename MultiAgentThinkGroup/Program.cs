@@ -9,6 +9,49 @@ using Serilog;
 using System.Text;
 using System.Text.Json;
 
+
+// =============================================================
+// Multi-Agent Think Group – Experiment Modes (High-Level)
+// =============================================================
+//
+// 1) Initial structured reasoning (per model)
+//    - For a user query, each model (Grok / ChatGPT / Gemini) is called
+//      with the InitialStepPrompt and returns a StructuredResponse:
+//        • reasoning[]: tagged steps like [PROBLEM], [DECOMPOSITION], [RISK], etc.
+//        • final_answer, confidence, sources
+//    - These per-model StructuredResponses are the baseline inputs.
+//
+// 2) Zero-shot single-judge merge (no dialogue)
+//    - A judge agent (e.g., Grok with CrossAnalysisJudgePrompt) reads the
+//      question + all initial StructuredResponses and produces a single
+//      merged StructuredResponse.
+//    - This is pure cross-model judging with transcript = null.
+//
+// 3) Multi-agent improvement chat (panel dialogue only)
+//    - All agents participate in N rounds of “panel discussion”.
+//    - Each turn, an agent sees: the question, its own initial SR, other
+//      agents’ initial SRs, and the transcript so far, then produces a
+//      plain-text critique/analysis (no JSON).
+//    - Output is a transcript: List<PanelMessage> (who said what, per round).
+//
+// 4) Multi-agent dialogue + single-judge merge (full pipeline)
+//    - Step 1: Run the multi-agent improvement chat for N rounds to get a
+//      transcript.
+//    - Step 2: The judge agent reads the question, all initial SRs, and the
+//      transcript, then returns one merged StructuredResponse.
+//    - This is the main experiment: debate first, then judge the combined reasoning.
+//
+// 5) Reasoning analysis utilities (optional metrics)
+//    - Helper functions parse StructuredResponse.Reasoning into tagged steps
+//      and compute simple stats per tag (e.g., counts of [RISK], [EVIDENCE], etc.).
+//    - Useful for comparing reasoning structure across models and merged outputs.
+//
+// 6) Single-agent structured test + file-aware helpers (debug / future use)
+//    - SingleStructuredTest: directly probes one agent’s structured output.
+//    - File helpers: can embed .cs files into the prompt as context for
+//      future experiments (e.g., judge/agents reading project code).
+// =============================================================
+
 class Program
 {
     private static readonly string openAIKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? throw new InvalidOperationException("OPENAI_API_KEY not set.");
