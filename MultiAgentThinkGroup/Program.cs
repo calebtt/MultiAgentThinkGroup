@@ -1,174 +1,193 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
+﻿using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
-using Microsoft.SemanticKernel.Agents.Chat;
 using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.Google;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+using Microsoft.SemanticKernel.Connectors.Grok;
+using Microsoft.SemanticKernel.Plugins.Web;
+using Microsoft.SemanticKernel.Plugins.Web.Google;
+using MultiAgentThinkGroup;
+using Serilog;
+using System.Text;
+using System.Text.Json;
+
+
+// =============================================================
+// Multi-Agent Think Group – Experiment Modes (High-Level)
+// =============================================================
+//
+// 1) Initial structured reasoning (per model)
+//    - For a user query, each model (Grok / ChatGPT / Gemini) is called
+//      with the InitialStepPrompt and returns a StructuredResponse:
+//        • reasoning[]: tagged steps like [PROBLEM], [DECOMPOSITION], [RISK], etc.
+//        • final_answer, confidence, sources
+//    - These per-model StructuredResponses are the baseline inputs.
+//
+// 2) Zero-shot single-judge merge (no dialogue)
+//    - A judge agent (e.g., Grok with CrossAnalysisJudgePrompt) reads the
+//      question + all initial StructuredResponses and produces a single
+//      merged StructuredResponse.
+//    - This is pure cross-model judging with transcript = null.
+//
+// 3) Multi-agent improvement chat (panel dialogue only)
+//    - All agents participate in N rounds of “panel discussion”.
+//    - Each turn, an agent sees: the question, its own initial SR, other
+//      agents’ initial SRs, and the transcript so far, then produces a
+//      plain-text critique/analysis (no JSON).
+//    - Output is a transcript: List<PanelMessage> (who said what, per round).
+//
+// 4) Multi-agent dialogue + single-judge merge (full pipeline)
+//    - Step 1: Run the multi-agent improvement chat for N rounds to get a
+//      transcript.
+//    - Step 2: The judge agent reads the question, all initial SRs, and the
+//      transcript, then returns one merged StructuredResponse.
+//    - This is the main experiment: debate first, then judge the combined reasoning.
+//
+// 5) Reasoning analysis utilities (optional metrics)
+//    - Helper functions parse StructuredResponse.Reasoning into tagged steps
+//      and compute simple stats per tag (e.g., counts of [RISK], [EVIDENCE], etc.).
+//    - Useful for comparing reasoning structure across models and merged outputs.
+//
+// 6) Single-agent structured test + file-aware helpers (debug / future use)
+//    - SingleStructuredTest: directly probes one agent’s structured output.
+//    - File helpers: can embed .cs files into the prompt as context for
+//      future experiments (e.g., judge/agents reading project code).
+// =============================================================
 
 class Program
 {
+    private static readonly string openAIKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? throw new InvalidOperationException("OPENAI_API_KEY not set.");
+    private static readonly string googleGeminiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? throw new InvalidOperationException("GEMINI_API_KEY not set.");
+    private static readonly string googleCustomSearchKey = Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? throw new InvalidOperationException("GOOGLE_CUSTOM_SEARCH_API_KEY not set.");
+    private static readonly string googleSearchEngineId = Environment.GetEnvironmentVariable("GOOGLE_SEARCH_ENGINE_ID") ?? throw new InvalidOperationException("GOOGLE_SEARCH_ENGINE_ID not set.");
+    private static readonly string grokKey = Environment.GetEnvironmentVariable("GROK_API_KEY") ?? throw new InvalidOperationException("GROK_API_KEY not set.");
+
+    private static readonly string openAIModel = "gpt-5.1";
+    private static readonly string googleModel = "gemini-3-pro-preview";
+    private static readonly string grokModel = "grok-4-1-fast-non-reasoning";
+
+    private static GoogleConnector googleConnector = new GoogleConnector(apiKey: googleCustomSearchKey, searchEngineId: googleSearchEngineId);
+
     static async Task Main(string[] args)
     {
-        // Load keys
-        var openAIKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? throw new InvalidOperationException("OPENAI_API_KEY not set.");
-        var googleKey = Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? throw new InvalidOperationException("GOOGLE_API_KEY not set.");
+        //TODO: modify to use real chain of thought for models that provide that (some models have their own out-of-band human readable CoT
+        //such as Gemini, the rest are asked to simulate it.)
 
-        // Kernels for each LLM
-        var grokBuilder = Kernel.CreateBuilder();
-        grokBuilder.Services.AddSingleton<IChatCompletionService>(new GrokCompletionService());
+        Algos.AddConsoleLogger("MultiAgentThinkGroupLog.txt");
+
+        var grokBuilder = Kernel.CreateBuilder().AddGrokChatCompletion(grokModel, grokKey);
+        var chatGPTBuilder = Kernel.CreateBuilder().AddOpenAIChatCompletion(openAIModel, openAIKey);
+        var geminiBuilder = Kernel.CreateBuilder().AddGoogleAIGeminiChatCompletion(googleModel, googleGeminiKey);
+
+        var geminiKernel = geminiBuilder.Build();
         var grokKernel = grokBuilder.Build();
+        var chatGPTKernel = chatGPTBuilder.Build();
 
-        var chatGPTKernel = Kernel.CreateBuilder().AddOpenAIChatCompletion("gpt-5.1", openAIKey).Build();
-        var geminiKernel = Kernel.CreateBuilder().AddGoogleAIGeminiChatCompletion("gemini-3-pro-preview", googleKey).Build();
+        // Create a web search engine plugin, add to kernels.
+        //AddGoogleSearchPlugin(geminiKernel, grokKernel, chatGPTKernel);
 
-        // Agents with tweaked instructions: No simulation of others, explicit multi-turn, terminate only on group consensus
-        var grokAgent = new ChatCompletionAgent
+        var query = "How can I build my own motorcycle?";
+
+        // Initial reasoning phase (structured outputs)
+        var grokInitial = await MultiAgentThinkOrchestrator
+            .InvokeForStructuredResponseAsync(Algos.CreateGrokAgent(grokKernel, Prompts.InitialStepPrompt), query);
+        var chatGptInitial = await MultiAgentThinkOrchestrator
+            .InvokeForStructuredResponseAsync(Algos.CreateChatGPTAgent(chatGPTKernel, Prompts.InitialStepPrompt), query);
+        var geminiInitial = await MultiAgentThinkOrchestrator
+            .InvokeForStructuredResponseAsync(Algos.CreateGeminiAgent(geminiKernel, Prompts.InitialStepPrompt), query);
+
+        // 1. Build the panel agents (for the discussion phase)
+        //    These stay kernel-based because the panel conversation is plain text.
+        var panelAgents = new List<PanelAgentDescriptor>
         {
-            Kernel = grokKernel,
-            Name = "GrokAgent",
-            Instructions = "First, generate your initial response to the query with step-by-step Chain of Thought (CoT) reasoning. In group chat, respond only on your turn. Evaluate others' responses (quality 1-10, veracity 1-10, suggestions). Analyze CoT steps for validity; if discrepancies exist, provide rationale and propose resolution toward consensus. Propose refinements. Do not simulate others. End ONLY when all agree on consensus with 'TERMINATE'."
+            new("Grok",    grokKernel),
+            new("ChatGPT", chatGPTKernel),
+            new("Gemini",  geminiKernel)
         };
 
-        var chatGPTAgent = new ChatCompletionAgent
+        var judge = new ZeroShotSingleJudge(Algos.CreateGrokJudgeAgent(grokKernel));
+        var orchestrator = new DialogueMergeSingleJudge(panelAgents, judge);
+        orchestrator.TurnOccurred += async (agentName, round, content) =>
         {
-            Kernel = chatGPTKernel,
-            Name = "ChatGPTAgent",
-            Instructions = "First, generate your initial response to the query with step-by-step Chain of Thought (CoT) reasoning. In group chat, respond only on your turn. Evaluate others' responses (quality 1-10, veracity 1-10, suggestions). Analyze CoT steps for validity; if discrepancies exist, provide rationale and propose resolution toward consensus. Propose refinements. Do not simulate others. End ONLY when all agree on consensus with 'TERMINATE'."
+            Log.Information("Agent: {agent} | Round: {round}\n{content}\n", agentName, round, content);
+            await Task.CompletedTask;
         };
 
-        var geminiAgent = new ChatCompletionAgent
+        var initial = new Dictionary<string, StructuredResponse>
         {
-            Kernel = geminiKernel,
-            Name = "GeminiAgent",
-            Instructions = "First, generate your initial response to the query with step-by-step Chain of Thought (CoT) reasoning. In group chat, respond only on your turn. Evaluate others' responses (quality 1-10, veracity 1-10, suggestions). Analyze CoT steps for validity; if discrepancies exist, provide rationale and propose resolution toward consensus. Propose refinements. Do not simulate others. End ONLY when all agree on consensus with 'TERMINATE'."
+            ["Grok"] = grokInitial,
+            ["ChatGPT"] = chatGptInitial,
+            ["Gemini"] = geminiInitial
         };
+        // Multi-agent dialogue + single judge merge
+        var (transcript, mergedAfterDialogue) = await orchestrator.RunAsync(query, initial, rounds: 2);
 
-        var consolidatorAgent = new ChatCompletionAgent
+        Log.Information("Final Merged Response after Dialogue:\n{response}", mergedAfterDialogue);
+    }
+
+    private static void AddGoogleSearchPlugin(Kernel geminiKernel, Kernel grokKernel, Kernel chatGPTKernel)
+    {
+        var google = new WebSearchEnginePlugin(googleConnector);
+        grokKernel.Plugins.AddFromObject(google, "google");
+        chatGPTKernel.Plugins.AddFromObject(google, "google");
+        geminiKernel.Plugins.AddFromObject(google, "google");
+    }
+
+    public static async Task SingleStructuredTest(ChatCompletionAgent agent, string name, string query)
+    {
+        var history = new ChatHistory();
+        history.AddUserMessage(query);
+
+        try
         {
-            Kernel = grokKernel,
-            Name = "Consolidator",
-            Instructions = "Review the group chat history, including initial CoT responses and evaluations. Highlight additional relevant conclusions from debates. Merge into a single, improved output with additional conclusions, resolving conflicts, and citing sources. Use CoT in your merging process."
-        };
-
-        // Sample Query (or use a simpler test query like "What is 2+2?" for debugging)
-        var query = "What is the impact of AI on climate change?";  // Or test: "What is 2+2? Explain step by step."
-
-        // Generate initial CoT responses from each agent individually
-        var initialHistory = new ChatHistory();
-        initialHistory.AddUserMessage(query);
-
-        var grokInitialMessages = new List<ChatMessageContent>();
-        await foreach (var msg in grokAgent.InvokeAsync(initialHistory))
-        {
-            grokInitialMessages.Add(msg);
-        }
-        var grokInitialContent = grokInitialMessages.LastOrDefault()?.Content ?? "";
-        Console.WriteLine($"Grok Initial: {grokInitialContent}");
-
-        var chatGPTInitialMessages = new List<ChatMessageContent>();
-        await foreach (var msg in chatGPTAgent.InvokeAsync(initialHistory))
-        {
-            chatGPTInitialMessages.Add(msg);
-        }
-        var chatGPTInitialContent = chatGPTInitialMessages.LastOrDefault()?.Content ?? "";
-        Console.WriteLine($"ChatGPT Initial: {chatGPTInitialContent}");
-
-        var geminiInitialMessages = new List<ChatMessageContent>();
-        await foreach (var msg in geminiAgent.InvokeAsync(initialHistory))
-        {
-            geminiInitialMessages.Add(msg);
-        }
-        var geminiInitialContent = geminiInitialMessages.LastOrDefault()?.Content ?? "";
-        Console.WriteLine($"Gemini Initial: {geminiInitialContent}");
-
-        // Define Termination Function (adjusted to check if ALL recent messages include 'TERMINATE')
-        var terminationFunction = KernelFunctionFactory.CreateFromPrompt(
-            "Review the last three agent messages: {{$input}}\n" +
-            "If ALL contain the word 'TERMINATE', output 'true'; otherwise, output 'false'.",
-            functionName: "ShouldTerminate"
-        );
-
-#pragma warning disable SKEXP0110 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-        var terminationStrategy = new KernelFunctionTerminationStrategy(terminationFunction, chatGPTKernel)
-        {
-            MaximumIterations = 15,  // Increased for more rounds (5 rounds x 3 agents)
-            Arguments = new KernelArguments { ["input"] = "{{$history.LastN(3)}}" }  // Custom to check last 3
-        };
-#pragma warning restore SKEXP0110 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-
-#pragma warning disable SKEXP0110 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-        var selectionStrategy = new SequentialSelectionStrategy();  // Ensures forced sequential turns
-#pragma warning restore SKEXP0110 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-
-        // Group Chat for Evaluation/Refinement
-#pragma warning disable SKEXP0110 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-        var groupChat = new AgentGroupChat(grokAgent, chatGPTAgent, geminiAgent)
-        {
-            ExecutionSettings = new AgentGroupChatSettings
+            await foreach (var response in agent.InvokeAsync(history))
             {
-                TerminationStrategy = terminationStrategy,
-                SelectionStrategy = selectionStrategy
+                var msg = response.Message;
+
+                if (msg is ChatMessageContent chat)
+                {
+                    // Try the convenience Content property first
+                    var text = chat.Content;
+
+                    // If Content is null/empty, fall back to TextContent items
+                    if (string.IsNullOrWhiteSpace(text) && chat.Items is { Count: > 0 })
+                    {
+                        var sb = new StringBuilder();
+                        foreach (var item in chat.Items)
+                        {
+                            if (item is TextContent t && !string.IsNullOrEmpty(t.Text))
+                            {
+                                sb.Append(t.Text);
+                            }
+                        }
+
+                        if (sb.Length > 0)
+                        {
+                            text = sb.ToString();
+                        }
+                    }
+
+                    // Final fallback: serialize the whole ChatMessageContent if we still have nothing
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        text = JsonSerializer.Serialize(chat, new JsonSerializerOptions
+                        {
+                            WriteIndented = true
+                        });
+                    }
+
+                    Log.Information("Response from {name} Agent:\n\n{content}", name, text);
+                }
+                else
+                {
+                    // Non-chat or unexpected type
+                    Log.Information("Response from {name} Agent (non-chat message):\n\n{@message}", name, msg);
+                }
             }
-        };
-#pragma warning restore SKEXP0110 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-
-        // Seed group chat with initial responses
-        groupChat.AddChatMessage(new ChatMessageContent(AuthorRole.User, query));
-        groupChat.AddChatMessage(new ChatMessageContent(AuthorRole.Assistant, $"Grok Initial: {grokInitialContent}", grokAgent.Name));
-        groupChat.AddChatMessage(new ChatMessageContent(AuthorRole.Assistant, $"ChatGPT Initial: {chatGPTInitialContent}", chatGPTAgent.Name));
-        groupChat.AddChatMessage(new ChatMessageContent(AuthorRole.Assistant, $"Gemini Initial: {geminiInitialContent}", geminiAgent.Name));
-        groupChat.AddChatMessage(new ChatMessageContent(AuthorRole.User, "Now evaluate each other's CoT responses, suggest improvements, refine collaboratively, and reach consensus on a merged output. Take turns: Grok first, then ChatGPT, then Gemini. Continue until all agree."));
-
-        // Invoke Group Chat (Iterations) with debug logging
-        Console.WriteLine("Group Chat Evaluations:");
-        int turn = 0;
-        await foreach (var message in groupChat.InvokeAsync())
-        {
-            turn++;
-            Console.WriteLine($"Turn {turn} - {message.AuthorName}: {message.Content}");
         }
-
-        // Retrieve chat history
-        var historyMessages = new List<ChatMessageContent>();
-        await foreach (var msg in groupChat.GetChatMessagesAsync())
+        catch (Exception ex)
         {
-            historyMessages.Add(msg);
-        }
-
-        // Check history length and summarize if too long (to avoid truncation)
-        if (historyMessages.Count > 50)  // Arbitrary threshold; adjust based on token limits
-        {
-            var summarizer = new ChatCompletionAgent
-            {
-                Kernel = grokKernel,
-                Name = "Summarizer",
-                Instructions = "Summarize the chat history concisely, preserving key CoT, evaluations, and proposals."
-            };
-            var summaryInput = new ChatHistory(historyMessages);
-            var summaryMessages = new List<ChatMessageContent>();
-            await foreach (var msg in summarizer.InvokeAsync(summaryInput))
-            {
-                summaryMessages.Add(msg);
-            }
-            historyMessages = summaryMessages;  // Replace with summary for consolidator
-            Console.WriteLine("History summarized due to length.");
-        }
-
-        // Consolidate
-        var finalInput = new ChatHistory(historyMessages);
-        var finalOutputs = new List<ChatMessageContent>();
-        await foreach (var msg in consolidatorAgent.InvokeAsync(finalInput))
-        {
-            finalOutputs.Add(msg);
-        }
-        if (finalOutputs.Count > 0)
-        {
-            Console.WriteLine($"Final Output: {finalOutputs.Last().Content}");
+            Log.Error(ex, "Error while invoking {name} Agent", name);
         }
     }
+
+
 }

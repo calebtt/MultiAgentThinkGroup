@@ -1,15 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-	<PropertyGroup>
-		<OutputType>Exe</OutputType>
-		<TargetFramework>net9.0</TargetFramework>
-		<ImplicitUsings>enable</ImplicitUsings>
-		<Nullable>enable</Nullable>
-		<NoWarn>SKEXP0110;SKEXP0050</NoWarn>
-		<IncludePrerelease>true</IncludePrerelease>
-	</PropertyGroup>
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+	  <NoWarn>SKEXP0110;SKEXP0050</NoWarn>
+  </PropertyGroup>
 
 	<ItemGroup>
+		<PackageReference Include="Dirkster.WatermarkControlsLib" Version="1.1.0" />
 		<PackageReference Include="Microsoft.SemanticKernel" Version="1.68.0" />
 		<PackageReference Include="Microsoft.SemanticKernel.Agents.Core" Version="1.68.0" />
 		<PackageReference Include="Microsoft.SemanticKernel.Agents.Orchestration" Version="1.68.0-preview" />
@@ -24,7 +25,6 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <ProjectReference Include="..\MinimalSemanticKernelGrokClient\MinimalSemanticKernelGrokClient.csproj" />
+	  <ProjectReference Include="..\MultiAgentThinkGroup\MultiAgentThinkGroup.csproj" />
 	</ItemGroup>
-
 </Project>
