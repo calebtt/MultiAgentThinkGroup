@@ -68,6 +68,8 @@ class Program
 
     static async Task Main(string[] args)
     {
+        //TODO: modify to use real chain of thought for models that provide that (some models have their own out-of-band human readable CoT
+        //such as Gemini, the rest are asked to simulate it.)
 
         Algos.AddConsoleLogger("MultiAgentThinkGroupLog.txt");
 
