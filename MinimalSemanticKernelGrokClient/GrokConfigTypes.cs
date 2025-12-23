@@ -1,46 +1,20 @@
-﻿using System.Text.Json.Serialization;
+﻿using Microsoft.SemanticKernel;
+using System.Text.Json.Serialization;
 
-namespace Microsoft.SemanticKernel.Connectors.Grok;
+namespace Matg.SemanticKernel.Connectors.Grok;
 
 public class GrokPromptExecutionSettings : PromptExecutionSettings
 {
     /// <summary>
-    /// Controls if / how tools are used (matches your existing behavior).
+    /// Controls if / how tools are used.
     /// </summary>
     public GrokToolCallBehavior? ToolCallBehavior { get; set; }
 
-    /// <summary>
-    /// Sampling temperature. Higher = more random. Typically 0.0–1.0.
-    /// Maps to 'temperature'.
-    /// </summary>
     public double? Temperature { get; set; }
-
-    /// <summary>
-    /// Nucleus sampling probability. Maps to 'top_p'.
-    /// </summary>
     public double? TopP { get; set; }
-
-    /// <summary>
-    /// Maximum number of tokens to generate. Maps to 'max_tokens'.
-    /// </summary>
     public int? MaxTokens { get; set; }
-
-    /// <summary>
-    /// Stop sequences where the model should stop generating.
-    /// Maps to 'stop'.
-    /// </summary>
     public IList<string>? StopSequences { get; set; }
-
-    /// <summary>
-    /// Presence penalty (-2..2) to encourage new topics.
-    /// Maps to 'presence_penalty'.
-    /// </summary>
     public double? PresencePenalty { get; set; }
-
-    /// <summary>
-    /// Frequency penalty (-2..2) to discourage repetition.
-    /// Maps to 'frequency_penalty'.
-    /// </summary>
     public double? FrequencyPenalty { get; set; }
 
     /// <summary>
@@ -56,32 +30,15 @@ public class GrokPromptExecutionSettings : PromptExecutionSettings
     public GrokStructuredOutputMode StructuredOutputMode { get; set; } = GrokStructuredOutputMode.None;
 
     /// <summary>
-    /// Optional JSON Schema (or schema-like object) to enforce when using
-    /// StructuredOutputMode.JsonSchema. This should be a JSON-serializable object
-    /// (e.g. an anonymous type, Dictionary&lt;string, object&gt;, or a POCO).
-    ///
-    /// It will be sent under:
-    ///   response_format: { type: "json_schema", json_schema: &lt;this object&gt; }
+    /// Optional JSON Schema object to enforce when using StructuredOutputMode.JsonSchema.
+    /// Sent as: response_format: { type: "json_schema", json_schema: <this> }
     /// </summary>
     public object? StructuredOutputSchema { get; set; }
 }
 
-
 public static class GrokPromptExecutionSettingsExtensions
 {
-    /// <summary>
-    /// Configure this settings instance to use xAI's JSON Schema based structured outputs.
-    /// This sets StructuredOutputMode to JsonSchema and assigns the given schema object.
-    ///
-    /// The schema object should be a JSON-serializable structure (anonymous type,
-    /// Dictionary&lt;string, object&gt;, POCO, etc.) matching the shape expected by xAI.
-    /// </summary>
-    /// <param name="settings">Settings instance to configure.</param>
-    /// <param name="jsonSchema">JSON schema object to send in response_format.json_schema.</param>
-    /// <returns>The same settings instance for chaining.</returns>
-    public static GrokPromptExecutionSettings UseJsonSchema(
-        this GrokPromptExecutionSettings settings,
-        object jsonSchema)
+    public static GrokPromptExecutionSettings UseJsonSchema(this GrokPromptExecutionSettings settings, object jsonSchema)
     {
         if (settings is null) throw new ArgumentNullException(nameof(settings));
         if (jsonSchema is null) throw new ArgumentNullException(nameof(jsonSchema));
@@ -91,12 +48,7 @@ public static class GrokPromptExecutionSettingsExtensions
         return settings;
     }
 
-    /// <summary>
-    /// Configure this settings instance to use xAI's tool_strict structured output mode
-    /// (no JSON schema payload is sent).
-    /// </summary>
-    public static GrokPromptExecutionSettings UseToolStrict(
-        this GrokPromptExecutionSettings settings)
+    public static GrokPromptExecutionSettings UseToolStrict(this GrokPromptExecutionSettings settings)
     {
         if (settings is null) throw new ArgumentNullException(nameof(settings));
 
@@ -105,7 +57,6 @@ public static class GrokPromptExecutionSettingsExtensions
         return settings;
     }
 }
-
 
 /// <summary>
 /// xAI structured output modes for Grok.
@@ -118,10 +69,10 @@ public enum GrokStructuredOutputMode
     ToolStrict
 }
 
-
-public class GrokToolCallBehavior
+public sealed class GrokToolCallBehavior
 {
-    public static GrokToolCallBehavior AutoInvokeKernelFunctions => new GrokToolCallBehavior();
+    // Singleton is fine; you only use “!= null” checks today.
+    public static readonly GrokToolCallBehavior AutoInvokeKernelFunctions = new();
 }
 
 public static class AIServiceExtensions
@@ -146,11 +97,14 @@ public sealed class GrokMessage
     [JsonPropertyName("content")]
     public string? Content { get; set; }
 
-    // NEW: for responses from Grok
+    // Responses from Grok (assistant tool calls)
     [JsonPropertyName("tool_calls")]
     public List<GrokToolCall>? ToolCalls { get; set; }
 
-    // Optional, Grok includes it in some responses
+    // Requests to Grok (tool result messages need this)
+    [JsonPropertyName("tool_call_id")]
+    public string? ToolCallId { get; set; }
+
     [JsonPropertyName("refusal")]
     public object? Refusal { get; set; }
 }

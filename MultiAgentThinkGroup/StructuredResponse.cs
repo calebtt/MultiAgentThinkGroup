@@ -48,7 +48,7 @@ public record StructuredResponse(
                     description = "Optional list of sources or URLs, if any."
                 }
             },
-            required = new[] { "final_answer", "confidence" },
+            required = new[] { "reasoning", "final_answer", "confidence" },
             additionalProperties = false
         },
         strict = true

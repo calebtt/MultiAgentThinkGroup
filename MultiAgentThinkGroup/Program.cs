@@ -1,11 +1,13 @@
-﻿using Microsoft.SemanticKernel;
+﻿using Matg.SemanticKernel.Connectors.Grok;
+using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.Grok;
 using Microsoft.SemanticKernel.Plugins.Web;
 using Microsoft.SemanticKernel.Plugins.Web.Google;
 using MultiAgentThinkGroup;
 using Serilog;
+using Serilog.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
 
@@ -62,7 +64,7 @@ class Program
 
     private static readonly string openAIModel = "gpt-5.1";
     private static readonly string googleModel = "gemini-3-pro-preview";
-    private static readonly string grokModel = "grok-4-1-fast-non-reasoning";
+    private static readonly string grokModel = "grok-4-1-fast-reasoning";
 
     private static GoogleConnector googleConnector = new GoogleConnector(apiKey: googleCustomSearchKey, searchEngineId: googleSearchEngineId);
 
@@ -73,7 +75,11 @@ class Program
 
         Algos.AddConsoleLogger("MultiAgentThinkGroupLog.txt");
 
-        var grokBuilder = Kernel.CreateBuilder().AddGrokChatCompletion(grokModel, grokKey);
+        // after Log.Logger = new LoggerConfiguration()...CreateLogger();
+        ILoggerFactory loggerFactory = new SerilogLoggerFactory(Log.Logger, dispose: false);
+
+        var grokBuilder = Kernel.CreateBuilder()
+            .AddGrokChatCompletion(grokModel, grokKey, loggerFactory: loggerFactory);
         var chatGPTBuilder = Kernel.CreateBuilder().AddOpenAIChatCompletion(openAIModel, openAIKey);
         var geminiBuilder = Kernel.CreateBuilder().AddGoogleAIGeminiChatCompletion(googleModel, googleGeminiKey);
 
@@ -84,7 +90,7 @@ class Program
         // Create a web search engine plugin, add to kernels.
         //AddGoogleSearchPlugin(geminiKernel, grokKernel, chatGPTKernel);
 
-        var query = "How can I build my own motorcycle?";
+        var query = "What are the important points to modern AI research?";
 
         // Initial reasoning phase (structured outputs)
         var grokInitial = await MultiAgentThinkOrchestrator

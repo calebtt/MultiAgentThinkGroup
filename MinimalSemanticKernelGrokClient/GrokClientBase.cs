@@ -4,9 +4,11 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
-namespace Microsoft.SemanticKernel.Connectors.Grok.Core;
+namespace Matg.SemanticKernel.Connectors.Grok.Core;
 
-// Base class that provides HttpClient and basic request helpers using real HttpClient calls.
+/// <summary>
+/// Base class that provides HttpClient and basic request helpers using real HttpClient calls.
+/// </summary>
 internal abstract class GrokClientBase
 {
     private readonly Func<ValueTask<string>>? _bearerTokenProvider;
@@ -41,15 +43,10 @@ internal abstract class GrokClientBase
         }
     }
 
-    /// <summary>
-    /// Sends the given HttpRequestMessage, ensures success, and returns the response body as string.
-    /// Uses the underlying HttpClient.
-    /// </summary>
     protected async Task<string> SendRequestAndGetStringBodyAsync(
         HttpRequestMessage httpRequestMessage,
         CancellationToken cancellationToken)
     {
-        // Safely read and log outgoing request body (debug level)
         try
         {
             if (httpRequestMessage.Content != null)
@@ -60,30 +57,30 @@ internal abstract class GrokClientBase
         }
         catch (Exception ex)
         {
-            // Logging must never crash the request pipeline
             this.Logger.LogWarning(ex, "Failed to read outgoing request content for logging.");
         }
 
         using var response = await this.HttpClient.SendAsync(httpRequestMessage, cancellationToken).ConfigureAwait(false);
-
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            // Include the outgoing request body in the exception message to help debugging.
+            // Try to parse Grok's structured error response
+            string errorMessage = ParseGrokErrorMessage(body)
+                ?? $"Request failed with status {(int)response.StatusCode} ({response.ReasonPhrase})";
+
             string outgoingSnippet = string.Empty;
             try
             {
                 if (httpRequestMessage.Content != null)
                 {
                     var full = await httpRequestMessage.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                    // avoid huge exceptions — keep first 32k chars
                     outgoingSnippet = full.Length > 32768 ? full.Substring(0, 32768) + "…(truncated)" : full;
                 }
             }
             catch { /* ignore */ }
 
-            var message = $"Request failed with status {(int)response.StatusCode} ({response.ReasonPhrase}). Body: {body}";
+            var message = $"{errorMessage}. Response body: {body}";
             if (!string.IsNullOrEmpty(outgoingSnippet))
             {
                 message += $"{Environment.NewLine}Outgoing request body (truncated):{Environment.NewLine}{outgoingSnippet}";
@@ -95,25 +92,46 @@ internal abstract class GrokClientBase
         return body;
     }
 
-
     /// <summary>
-    /// Sends the request but returns the HttpResponseMessage as soon as headers are available.
-    /// Caller is responsible for disposing the response and reading the content stream.
+    /// Attempts to extract a user-friendly error message from Grok's error response JSON.
     /// </summary>
+    private static string? ParseGrokErrorMessage(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var errorObj))
+            {
+                if (errorObj.TryGetProperty("message", out var msgProp))
+                {
+                    return msgProp.GetString();
+                }
+            }
+        }
+        catch
+        {
+            // Body wasn't valid JSON or didn't have expected structure
+        }
+        return null;
+    }
+
     protected async Task<HttpResponseMessage> SendRequestAndGetResponseImmediatelyAfterHeadersReadAsync(
         HttpRequestMessage httpRequestMessage,
         CancellationToken cancellationToken)
     {
-        // Note: Caller must Dispose the returned HttpResponseMessage.
-        var response = await this.HttpClient.SendAsync(httpRequestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+        var response = await this.HttpClient
+            .SendAsync(httpRequestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            // Read small body for diagnostics (with a short timeout / cancellation token)
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             response.Dispose();
-            throw new HttpRequestException($"Request failed with status {(int)response.StatusCode} ({response.ReasonPhrase}). Body: {body}");
+
+            string errorMessage = ParseGrokErrorMessage(body)
+                ?? $"Request failed with status {(int)response.StatusCode} ({response.ReasonPhrase})";
+
+            throw new HttpRequestException($"{errorMessage}. Body: {body}");
         }
 
         return response;
@@ -125,8 +143,6 @@ internal abstract class GrokClientBase
         {
             var options = new JsonSerializerOptions
             {
-                // Grok uses lower-case json field names (choices, message, etc.)
-                // while our C# types use PascalCase. Make matching case-insensitive.
                 PropertyNameCaseInsensitive = true
             };
 
@@ -142,11 +158,6 @@ internal abstract class GrokClientBase
         }
     }
 
-
-    /// <summary>
-    /// Create an HttpRequestMessage with JSON content and appropriate headers.
-    /// Uses bearer token provider or API key header if present.
-    /// </summary>
     protected async Task<HttpRequestMessage> CreateHttpRequestAsync(object requestData, Uri endpoint, CancellationToken cancellationToken = default)
     {
         var options = new JsonSerializerOptions
@@ -161,9 +172,12 @@ internal abstract class GrokClientBase
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
 
+        Logger.LogDebug("Grok request -> {Endpoint}\n{Body}", endpoint, json.Length <= 12000 ? json : json[..12000] + "…(truncated)");
+
         message.Headers.UserAgent.ParseAdd("SemanticKernel-GrokConnector/1.0");
         message.Headers.Add("x-semantic-kernel-version", "1.0");
 
+        // Set authentication header
         if (this._bearerTokenProvider is not null)
         {
             var bearerKey = await this._bearerTokenProvider().ConfigureAwait(false);
@@ -174,12 +188,12 @@ internal abstract class GrokClientBase
         }
         else if (!string.IsNullOrWhiteSpace(this._apiKey))
         {
-            message.Headers.Add("x-api-key", this._apiKey);
+            // FIX: Grok API requires "Authorization: Bearer <key>", NOT "x-api-key"
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", this._apiKey);
         }
 
         return message;
     }
-
 
     protected static string GetApiVersionSubLink(GrokAIVersion apiVersion)
         => apiVersion switch
@@ -190,7 +204,6 @@ internal abstract class GrokClientBase
         };
 }
 
-// Small enum for API version selection.
 internal enum GrokAIVersion
 {
     V1,

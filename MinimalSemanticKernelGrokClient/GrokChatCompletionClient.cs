@@ -1,9 +1,12 @@
 ﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
-namespace Microsoft.SemanticKernel.Connectors.Grok.Core;
+namespace Matg.SemanticKernel.Connectors.Grok.Core;
 
 internal sealed class GrokChatCompletionClient : GrokClientBase
 {
@@ -25,7 +28,7 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         }
 
         this._modelId = modelId ?? throw new ArgumentNullException(nameof(modelId));
-        this._logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        this._logger = logger ?? NullLogger.Instance;
 
         this._chatGenerationEndpoint = new Uri(httpClient.BaseAddress, $"{apiVersion}/chat/completions");
     }
@@ -40,18 +43,8 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
 
         var grokRequest = new GrokRequest
         {
-            Messages = new List<GrokMessage>()
+            Messages = ConvertChatHistoryToGrokMessages(chatHistory).ToList()
         };
-
-        // Populate messages from history
-        foreach (var (role, content) in ExtractMessagesFromChatHistory(chatHistory))
-        {
-            grokRequest.Messages.Add(new GrokMessage
-            {
-                Role = role,
-                Content = content ?? string.Empty
-            });
-        }
 
         if (grokRequest.Messages.Count == 0)
         {
@@ -59,9 +52,11 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         }
 
         // Add tool definitions if tool calling is enabled
+        // FIX: Only set tools if there are actual functions defined
+        object? tools = null;
         if (executionSettings?.ToolCallBehavior != null && kernel != null)
         {
-            grokRequest.Tools = GetToolDefinitions(kernel);
+            tools = GetToolDefinitions(kernel);
         }
 
         // Map structured output mode enum to xAI string value, if any.
@@ -72,7 +67,6 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             _ => null
         };
 
-        // Build response_format only when we have a schema AND we're in json_schema mode.
         object? responseFormat = null;
         if (executionSettings?.StructuredOutputSchema is not null &&
             string.Equals(structuredMode, "json_schema", StringComparison.OrdinalIgnoreCase))
@@ -88,9 +82,9 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         {
             model = this._modelId,
             messages = grokRequest.Messages,
-            tools = grokRequest.Tools,
+            tools = tools,  // Will be null if no tools, which gets omitted from JSON
             stream = false,
-            // New generation controls:
+
             n = executionSettings?.CandidateCount,
             temperature = executionSettings?.Temperature,
             top_p = executionSettings?.TopP,
@@ -98,11 +92,10 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             stop = executionSettings?.StopSequences,
             presence_penalty = executionSettings?.PresencePenalty,
             frequency_penalty = executionSettings?.FrequencyPenalty,
-            // xAI-specific bits:
+
             xai_structured_output_mode = structuredMode,
             response_format = responseFormat
         };
-
 
         var request = await CreateHttpRequestAsync(requestData, _chatGenerationEndpoint, cancellationToken)
             .ConfigureAwait(false);
@@ -117,20 +110,18 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             throw new InvalidOperationException("No choices returned");
         }
 
-        var choice = response.Choices[0];
-        var grokMessage = choice.Message;
-
+        var grokMessage = response.Choices[0].Message;
         var rawContent = grokMessage.Content ?? string.Empty;
 
-        // Base SK message
         var message = new ChatMessageContent(AuthorRole.Assistant, rawContent);
 
-        // NEW: surface Grok tool_calls as SK FunctionCallContent
+        // Surface Grok tool_calls as SK FunctionCallContent
         if (grokMessage.ToolCalls != null)
         {
             foreach (var toolCall in grokMessage.ToolCalls)
             {
-                if (toolCall.Function?.Name is not { } functionName || string.IsNullOrWhiteSpace(functionName))
+                var rawName = toolCall.Function?.Name;
+                if (string.IsNullOrWhiteSpace(rawName))
                 {
                     continue;
                 }
@@ -141,21 +132,21 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
                     id = Guid.NewGuid().ToString("N");
                 }
 
-                var argsJson = toolCall.Function.Arguments ?? "{}";
+                // We encode tool names as "Plugin-Function" when possible.
+                SplitToolName(rawName!, out var pluginName, out var functionName);
+
+                var argsJson = toolCall.Function?.Arguments ?? "{}";
                 var arguments = BuildKernelArgumentsFromJsonString(argsJson);
 
                 var functionCall = new FunctionCallContent(
                     functionName: functionName,
-                    pluginName: null, // Grok tools aren't plugin-scoped
-                    id: id,
+                    pluginName: pluginName,
+                    id: id!,
                     arguments: arguments);
 
                 message.Items.Add(functionCall);
             }
         }
-
-        // OPTIONAL: keep your "content contains JSON" fallback, if you want:
-        // if (!string.IsNullOrWhiteSpace(rawContent) && rawContent.TrimStart().StartsWith("{")) { ... }
 
         return new List<ChatMessageContent> { message };
     }
@@ -164,37 +155,29 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         ChatHistory chatHistory,
         GrokPromptExecutionSettings? executionSettings = null,
         Kernel? kernel = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         if (chatHistory is null) throw new ArgumentNullException(nameof(chatHistory));
 
+        // NOTE: This streaming path intentionally only streams text deltas.
+        // Tool calling in streaming would require parsing tool_call deltas and then a follow-up non-streaming loop.
+
         var grokRequest = new GrokRequest
         {
-            Messages = new List<GrokMessage>()
+            Messages = ConvertChatHistoryToGrokMessages(chatHistory).ToList()
         };
-
-        // Populate messages from history
-        foreach (var (role, content) in ExtractMessagesFromChatHistory(chatHistory))
-        {
-            grokRequest.Messages.Add(new GrokMessage
-            {
-                Role = role,
-                Content = content ?? string.Empty
-            });
-        }
 
         if (grokRequest.Messages.Count == 0)
         {
             throw new InvalidOperationException("Chat history does not contain any messages");
         }
 
-        // Add tool definitions if tool calling is enabled
+        object? tools = null;
         if (executionSettings?.ToolCallBehavior != null && kernel != null)
         {
-            grokRequest.Tools = GetToolDefinitions(kernel);
+            tools = GetToolDefinitions(kernel);
         }
 
-        // Map structured output mode enum to xAI string value, if any.
         string? structuredMode = executionSettings?.StructuredOutputMode switch
         {
             GrokStructuredOutputMode.JsonSchema => "json_schema",
@@ -202,7 +185,6 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             _ => null
         };
 
-        // Build response_format only when we have a schema AND we're in json_schema mode.
         object? responseFormat = null;
         if (executionSettings?.StructuredOutputSchema is not null &&
             string.Equals(structuredMode, "json_schema", StringComparison.OrdinalIgnoreCase))
@@ -218,9 +200,9 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         {
             model = this._modelId,
             messages = grokRequest.Messages,
-            tools = grokRequest.Tools,
+            tools = tools,
             stream = true,
-            // New generation controls:
+
             n = executionSettings?.CandidateCount,
             temperature = executionSettings?.Temperature,
             top_p = executionSettings?.TopP,
@@ -228,7 +210,7 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             stop = executionSettings?.StopSequences,
             presence_penalty = executionSettings?.PresencePenalty,
             frequency_penalty = executionSettings?.FrequencyPenalty,
-            // xAI-specific bits:
+
             xai_structured_output_mode = structuredMode,
             response_format = responseFormat
         };
@@ -239,7 +221,6 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         HttpResponseMessage httpResponse;
         try
         {
-            // Uses GrokClientBase helper that reads error body on non-success
             httpResponse = await SendRequestAndGetResponseImmediatelyAfterHeadersReadAsync(request, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -255,21 +236,27 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         {
             while (true)
             {
-                var line = await reader.ReadLineAsync().ConfigureAwait(false);
-                if (line is null)
+                // FIX: Use cancellation-aware read
+                string? line;
+                try
                 {
-                    // End of stream
+                    line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
                     yield break;
                 }
 
-                // Skip comments / keep-alives
-                if (string.IsNullOrWhiteSpace(line) ||
-                    line.StartsWith(":", StringComparison.OrdinalIgnoreCase))
+                if (line is null)
+                {
+                    yield break;
+                }
+
+                if (string.IsNullOrWhiteSpace(line) || line.StartsWith(":", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                // Strip "data: " prefix if present
                 if (line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
                     line = line.Substring("data:".Length).Trim();
@@ -280,7 +267,6 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
                     yield break;
                 }
 
-                // Try to interpret the payload as JSON with { choices[0].delta.content } etc.
                 string? text = null;
                 try
                 {
@@ -288,7 +274,7 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
                 }
                 catch (JsonException)
                 {
-                    // malformed chunk; ignore and continue
+                    // ignore malformed chunk
                 }
 
                 if (!string.IsNullOrEmpty(text))
@@ -299,61 +285,55 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         }
     }
 
-
-    // Helper: Convert kernel plugins/functions to Grok/OpenAI tool format
     private static object? GetToolDefinitions(Kernel kernel)
     {
         var functions = kernel.Plugins
             .SelectMany(p => p.GetFunctionsMetadata())
             .ToList();
 
-        if (!functions.Any()) return null;
+        // FIX: Return null instead of empty array when no tools
+        if (functions.Count == 0) return null;
 
-        return functions.Select(f => new
+        return functions.Select(f =>
         {
-            type = "function",
-            function = new
+            // Use hyphen separator to avoid conflicts with function names containing dots
+            var fullName = string.IsNullOrWhiteSpace(f.PluginName) ? f.Name : $"{f.PluginName}-{f.Name}";
+
+            return new
             {
-                name = f.Name,
-                description = f.Description ?? "No description",
-                parameters = new
+                type = "function",
+                function = new
                 {
-                    type = "object",
-                    properties = f.Parameters.ToDictionary(
-                        p => p.Name,
-                        p => new
-                        {
-                            type = MapToJsonSchemaType(p.ParameterType),
-                            description = p.Description ?? string.Empty
-                        }),
-                    required = f.Parameters
-                        .Where(p => p.IsRequired)
-                        .Select(p => p.Name)
-                        .ToArray()
+                    name = fullName,
+                    description = f.Description ?? "No description",
+                    parameters = new
+                    {
+                        type = "object",
+                        properties = f.Parameters.ToDictionary(
+                            p => p.Name,
+                            p => new
+                            {
+                                type = MapToJsonSchemaType(p.ParameterType),
+                                description = p.Description ?? string.Empty
+                            }),
+                        required = f.Parameters
+                            .Where(p => p.IsRequired)
+                            .Select(p => p.Name)
+                            .ToArray()
+                    }
                 }
-            }
+            };
         }).ToArray();
     }
 
-    // Map .NET types to valid JSON Schema types
     private static string MapToJsonSchemaType(Type? type)
     {
-        if (type == null)
-        {
-            return "string";
-        }
+        if (type == null) return "string";
 
         var t = Nullable.GetUnderlyingType(type) ?? type;
 
-        if (t == typeof(string))
-        {
-            return "string";
-        }
-
-        if (t == typeof(bool))
-        {
-            return "boolean";
-        }
+        if (t == typeof(string)) return "string";
+        if (t == typeof(bool)) return "boolean";
 
         if (t == typeof(int) || t == typeof(long) || t == typeof(short) ||
             t == typeof(byte) || t == typeof(uint) || t == typeof(ulong) ||
@@ -367,19 +347,15 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             return "number";
         }
 
-        // Treat collections as arrays
         if (typeof(System.Collections.IEnumerable).IsAssignableFrom(t) && t != typeof(string))
         {
             return "array";
         }
 
-        // Fallback: stringify complex types
         return "string";
     }
 
-    #region ChatHistory extraction helpers
-
-    private static IEnumerable<(string Role, string? Content)> ExtractMessagesFromChatHistory(ChatHistory chatHistory)
+    private static IEnumerable<GrokMessage> ConvertChatHistoryToGrokMessages(ChatHistory chatHistory)
     {
         foreach (var message in chatHistory)
         {
@@ -388,61 +364,201 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
                 continue;
             }
 
-            var role = MapAuthorRoleToString(chatMessage.Role);
-            string? content = chatMessage.Content;
-
-            // If Content is empty but there are Items (TextContent, FunctionResultContent, etc),
-            // flatten those into a single string so Grok sees the tool results.
-            if (string.IsNullOrWhiteSpace(content) &&
-                chatMessage.Items is not null &&
-                chatMessage.Items.Count > 0)
+            var grok = new GrokMessage
             {
-                var sb = new StringBuilder();
+                Role = MapAuthorRoleToString(chatMessage.Role)
+            };
 
-                foreach (var item in chatMessage.Items)
+            // 1) Tool result messages must be role=tool and include tool_call_id
+            if (chatMessage.Role == AuthorRole.Tool)
+            {
+                // FIX: Try multiple sources for tool_call_id
+                grok.ToolCallId = ExtractToolCallId(chatMessage);
+                grok.Content = ExtractToolResultContent(chatMessage) ?? string.Empty;
+                yield return grok;
+                continue;
+            }
+
+            // 2) Assistant messages that contain FunctionCallContent must serialize tool_calls
+            if (chatMessage.Role == AuthorRole.Assistant)
+            {
+                var calls = chatMessage.Items?.OfType<FunctionCallContent>().ToList();
+                if (calls is { Count: > 0 })
                 {
-                    switch (item)
-                    {
-                        case TextContent text:
-                            // Normal conversational text
-                            sb.Append(text.Text);
-                            break;
-
-                        case FunctionResultContent fnResult:
-                            // Tool result from SK – serialize to something Grok can consume.
-                            // Prefer raw string / JSON, fall back to JSON serialization.
-                            if (fnResult.Result is string s)
-                            {
-                                sb.Append(s);
-                            }
-                            else if (fnResult.Result is JsonElement je)
-                            {
-                                sb.Append(je.GetRawText());
-                            }
-                            else if (fnResult.Result is not null)
-                            {
-                                sb.Append(JsonSerializer.Serialize(fnResult.Result));
-                            }
-                            break;
-
-                        default:
-                            // Fallback: don’t lose information, even if we don’t know the item type.
-                            sb.Append(item.ToString());
-                            break;
-                    }
-                }
-
-                if (sb.Length > 0)
-                {
-                    content = sb.ToString();
+                    grok.ToolCalls = calls.Select(ToGrokToolCall).ToList();
                 }
             }
 
-            yield return (role, content);
+            // Normal text content (or flattened TextContent items)
+            grok.Content = ExtractTextContent(chatMessage);
+
+            yield return grok;
         }
     }
 
-    #endregion
+    /// <summary>
+    /// Extracts tool_call_id from a tool result message.
+    /// Checks multiple possible locations since SK stores this differently depending on how the message was created.
+    /// </summary>
+    private static string? ExtractToolCallId(ChatMessageContent msg)
+    {
+        // First, check FunctionResultContent items - this is where SK usually stores the CallId
+        if (msg.Items is { Count: > 0 })
+        {
+            var fnResult = msg.Items.OfType<FunctionResultContent>().FirstOrDefault();
+            if (fnResult != null && !string.IsNullOrWhiteSpace(fnResult.CallId))
+            {
+                return fnResult.CallId;
+            }
+        }
+
+        // Fallback: check metadata with various key names
+        return TryGetToolCallIdFromMetadata(msg);
+    }
+
+    private static GrokToolCall ToGrokToolCall(FunctionCallContent call)
+    {
+        // Use hyphen separator to match GetToolDefinitions
+        var fullName = string.IsNullOrWhiteSpace(call.PluginName)
+            ? call.FunctionName
+            : $"{call.PluginName}-{call.FunctionName}";
+
+        var argsJson = SerializeKernelArguments(call.Arguments);
+
+        return new GrokToolCall
+        {
+            Id = string.IsNullOrWhiteSpace(call.Id) ? Guid.NewGuid().ToString("N") : call.Id,
+            Type = "function",
+            Function = new GrokToolFunction
+            {
+                Name = fullName,
+                Arguments = argsJson
+            }
+        };
+    }
+
+    private static string SerializeKernelArguments(KernelArguments? args)
+    {
+        if (args == null || args.Count == 0) return "{}";
+
+        // KernelArguments is IEnumerable<KeyValuePair<string, object?>>
+        var dict = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var kvp in args)
+        {
+            dict[kvp.Key] = kvp.Value;
+        }
+
+        return JsonSerializer.Serialize(dict, new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
+    }
+
+    private static string? ExtractToolResultContent(ChatMessageContent msg)
+    {
+        if (!string.IsNullOrWhiteSpace(msg.Content))
+        {
+            return msg.Content;
+        }
+
+        if (msg.Items is null || msg.Items.Count == 0)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        foreach (var item in msg.Items)
+        {
+            if (item is FunctionResultContent fnResult)
+            {
+                if (fnResult.Result is string s) sb.Append(s);
+                else if (fnResult.Result is JsonElement je) sb.Append(je.GetRawText());
+                else if (fnResult.Result is not null) sb.Append(JsonSerializer.Serialize(fnResult.Result));
+            }
+            else if (item is TextContent text)
+            {
+                sb.Append(text.Text);
+            }
+        }
+
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    private static string? ExtractTextContent(ChatMessageContent msg)
+    {
+        if (!string.IsNullOrWhiteSpace(msg.Content))
+        {
+            return msg.Content;
+        }
+
+        if (msg.Items is null || msg.Items.Count == 0)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        foreach (var item in msg.Items)
+        {
+            if (item is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
+            {
+                sb.Append(text.Text);
+            }
+        }
+
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    private static string? TryGetToolCallIdFromMetadata(ChatMessageContent msg)
+    {
+        if (msg.Metadata is null || msg.Metadata.Count == 0)
+        {
+            return null;
+        }
+
+        // Common keys used by SK/connectors
+        string[] keys =
+        [
+            "tool_call_id",
+            "tool_id",
+            "toolId",
+            "toolid",
+            "call_id",
+            "callId"
+        ];
+
+        foreach (var k in keys)
+        {
+            if (!msg.Metadata.TryGetValue(k, out var val) || val is null) continue;
+
+            if (val is string s && !string.IsNullOrWhiteSpace(s)) return s;
+
+            if (val is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.String)
+                {
+                    var str = je.GetString();
+                    if (!string.IsNullOrWhiteSpace(str)) return str;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static void SplitToolName(string raw, out string? pluginName, out string functionName)
+    {
+        // We encode as "Plugin-Function". If not present, pluginName=null.
+        var idx = raw.IndexOf('-');
+        if (idx > 0 && idx < raw.Length - 1)
+        {
+            pluginName = raw.Substring(0, idx);
+            functionName = raw.Substring(idx + 1);
+            return;
+        }
+
+        pluginName = null;
+        functionName = raw;
+    }
 
     private static string? TryExtractTextFromPossibleJson(string payload)
     {
@@ -451,22 +567,29 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
             using var doc = JsonDocument.Parse(payload);
             var root = doc.RootElement;
 
-            // delta-style: root.choices[0].delta.content
-            if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0)
+            if (root.TryGetProperty("choices", out var choices) &&
+                choices.ValueKind == JsonValueKind.Array &&
+                choices.GetArrayLength() > 0)
             {
                 var first = choices[0];
-                if (first.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object && delta.TryGetProperty("content", out var contentEl))
+                if (first.TryGetProperty("delta", out var delta) &&
+                    delta.ValueKind == JsonValueKind.Object &&
+                    delta.TryGetProperty("content", out var contentEl))
                 {
                     return contentEl.GetString();
                 }
 
-                if (first.TryGetProperty("message", out var msg) && msg.ValueKind == JsonValueKind.Object && msg.TryGetProperty("content", out var content2))
+                if (first.TryGetProperty("message", out var msg) &&
+                    msg.ValueKind == JsonValueKind.Object &&
+                    msg.TryGetProperty("content", out var content2))
                 {
                     return content2.GetString();
                 }
             }
 
-            if (root.TryGetProperty("delta", out var deltaRoot) && deltaRoot.ValueKind == JsonValueKind.Object && deltaRoot.TryGetProperty("content", out var contentDelta))
+            if (root.TryGetProperty("delta", out var deltaRoot) &&
+                deltaRoot.ValueKind == JsonValueKind.Object &&
+                deltaRoot.TryGetProperty("content", out var contentDelta))
             {
                 return contentDelta.GetString();
             }
@@ -489,12 +612,12 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         }
     }
 
-    private static string MapAuthorRoleToString(Microsoft.SemanticKernel.ChatCompletion.AuthorRole role)
+    private static string MapAuthorRoleToString(AuthorRole role)
     {
-        if (role == Microsoft.SemanticKernel.ChatCompletion.AuthorRole.User) return "user";
-        if (role == Microsoft.SemanticKernel.ChatCompletion.AuthorRole.Assistant) return "assistant";
-        if (role == Microsoft.SemanticKernel.ChatCompletion.AuthorRole.System) return "system";
-        if (role == Microsoft.SemanticKernel.ChatCompletion.AuthorRole.Tool) return "tool";
+        if (role == AuthorRole.User) return "user";
+        if (role == AuthorRole.Assistant) return "assistant";
+        if (role == AuthorRole.System) return "system";
+        if (role == AuthorRole.Tool) return "tool";
         return role.ToString().ToLowerInvariant();
     }
 
@@ -526,14 +649,10 @@ internal sealed class GrokChatCompletionClient : GrokClientBase
         }
         catch
         {
-            // Fallback: keep the raw JSON as a single parameter
             return new KernelArguments
             {
                 ["json"] = json
             };
         }
     }
-
-
 }
-
